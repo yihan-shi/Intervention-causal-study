@@ -3,6 +3,7 @@ library(dplyr)
 library(ggplot2)
 library(pROC)
 library(boot)
+library("lattice")
 
 # set up -----------------------------------------------------------------------
 set.seed(1)
@@ -13,11 +14,11 @@ risk_t1 <-  runif(n, 0, 1)
 plot(density(risk_t1))
 
 # intervention
-cmi_cutoff <- 0.95
+cmi_cutoff <- 0.1
 
 # intervention effectiveness/probability of the intervention works (fixed, varies in different trials)
 # b_intervention <- c(seq(0, 1, 0.1)) # set to 1  for null case
-b_intervention <- 0.5
+b_intervention <- 1
 
 gen_outcome1 <- function(risk_t1, n = n){
   outcome_noint <- rbinom(n, 1, 0.9 * risk_t1) # the constant vary to control true model AUC
@@ -60,22 +61,42 @@ b <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff)
 gen_outcome <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
   df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff)
 
-  # generate all observed outcome probabilistically
+
+  condition <- df %>%
+    filter(outcome_noint == 1 & cmi == 1)
+
+  # 1. generate all observed outcome probabilistically
   # oo: if outcome_no_intervention = 0 & intervention = 0 --> old outcome
   # ol: if outcome_no_intervention = 0 & intervention = 1 --> old outcome
   # lo: if outcome_no_intervention = 1 & intervention = 0 --> old outcome
   # ll: if outcome_no_intervention = 1 & intervention = 1 --> rbinom(n, 1, risks_t2)
 
-  condition <- df %>%
-    filter(outcome_noint == 1 & cmi == 1)
   num_obs <- dim(condition)[1]
 
-  df <- df %>%
+  df_final <- df %>%
     mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
                                  rbinom(num_obs, 1, df$risk_t2),
                                  outcome_noint))
 
-  return (df)
+
+  # 2. choose b_intervention% of the ppl (outcome_no_intervention = 1 & intervention = 1) to have
+  # outcome = 0
+
+  # effective <- sample_frac(condition, size = b_intervention, replace = FALSE)
+  # effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
+  #              outcome_noint %in% effective$outcome_noint &
+  #              cmi %in% effective$cmi &
+  #              risk_t2 %in% effective$risk_t2))
+  #
+  # non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
+  #                                  outcome_noint %in% effective$outcome_noint &
+  #                                  cmi %in% effective$cmi &
+  #                                  risk_t2 %in% effective$risk_t2))
+  # effective_df$outcome_int <- 0
+  # non_effective_df$outcome_int <- non_effective_df$outcome_noint
+  # df_final <- rbind(effective_df, non_effective_df)
+
+  return (df_final)
 }
 
 c <- gen_outcome(risk_t1, n, b_intervention, cmi_cutoff)
@@ -151,14 +172,13 @@ for (i in seq(from=0.1, to=1, by=0.1)) {
   AUC.grid[i*10] <- auc(y.test, y.pred)
 }
 
-plot(AUC.grid, xlab = "b_intervention * 10", ylab = "AUC", type = "l",
-     sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=seq(1,10,1))
+plot(AUC.grid, xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.5, 1),
+     type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
 
 # vary cmi_cutoff
 cmi.grid <- rep(NA, 10)
 for (i in seq(from=0.1, to=1, by=0.1)) {
-
   c <- as.data.frame(gen_outcome(risk_t1,
                                  n,
                                  b_intervention,
@@ -182,6 +202,46 @@ for (i in seq(from=0.1, to=1, by=0.1)) {
   cmi.grid[i*10] <- auc(y.test, y.pred)
 }
 
-plot(cmi.grid, xlab = "CMI_cutoff * 10", ylab = "AUC", type = "l",
-     sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=seq(1,10,1))
+plot(cmi.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.5, 1),
+     type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+
+
+# heatmap -----------------------------------------------------------------
+cmi <- seq(0.1, 0.9, length.out=10)
+b_int <- seq(0.1, 1, length.out=10)
+
+data <- expand.grid(X=cmi, Y=b_int)
+auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+
+
+for (cmi in seq(from=0.1, to=0.9, by=0.1)) {
+  for (b_int in seq(from=0.1, to=1, by=0.1)) {
+    c <- as.data.frame(gen_outcome(risk_t1,
+                                   n,
+                                   b_intervention = b_int,
+                                   cmi_cutoff = cmi))
+    x <- c %>%
+      select(c(1,3))
+    y <- c %>%
+      select(5)
+
+    # train/test split
+    train <- sample(1:nrow(x), nrow(x)/2)
+    x.train <- x[train,]
+    y.train <- y[train,]
+
+    test <- (-train)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    fit <- glm(y.train ~ ., data = x.train, family = "binomial")
+    y.pred <- predict(fit, x.test, type = "response")
+    auc_table[cmi*10, b_int*10] <- auc(y.test, y.pred)
+  }
+}
+
+levelplot(auc_table ~ X*Y, data=data,
+          main="AUC",
+          xlab="cmi", ylab="b_int")
+
