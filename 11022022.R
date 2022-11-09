@@ -71,30 +71,30 @@ gen_outcome <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
   # lo: if outcome_no_intervention = 1 & intervention = 0 --> old outcome
   # ll: if outcome_no_intervention = 1 & intervention = 1 --> rbinom(n, 1, risks_t2)
 
-  num_obs <- dim(condition)[1]
-
-  df_final <- df %>%
-    mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
-                                 rbinom(num_obs, 1, df$risk_t2),
-                                 outcome_noint))
+  # num_obs <- dim(condition)[1]
+  #
+  # df_final <- df %>%
+  #   mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
+  #                                rbinom(num_obs, 1, df$risk_t2),
+  #                                outcome_noint))
 
 
   # 2. choose b_intervention% of the ppl (outcome_no_intervention = 1 & intervention = 1) to have
   # outcome = 0
 
-  # effective <- sample_frac(condition, size = b_intervention, replace = FALSE)
-  # effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
-  #              outcome_noint %in% effective$outcome_noint &
-  #              cmi %in% effective$cmi &
-  #              risk_t2 %in% effective$risk_t2))
-  #
-  # non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
-  #                                  outcome_noint %in% effective$outcome_noint &
-  #                                  cmi %in% effective$cmi &
-  #                                  risk_t2 %in% effective$risk_t2))
-  # effective_df$outcome_int <- 0
-  # non_effective_df$outcome_int <- non_effective_df$outcome_noint
-  # df_final <- rbind(effective_df, non_effective_df)
+  effective <- sample_frac(condition, size = b_intervention, replace = FALSE)
+  effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
+               outcome_noint %in% effective$outcome_noint &
+               cmi %in% effective$cmi &
+               risk_t2 %in% effective$risk_t2))
+
+  non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
+                                   outcome_noint %in% effective$outcome_noint &
+                                   cmi %in% effective$cmi &
+                                   risk_t2 %in% effective$risk_t2))
+  effective_df$outcome_int <- 0
+  non_effective_df$outcome_int <- non_effective_df$outcome_noint
+  df_final <- rbind(effective_df, non_effective_df)
 
   return (df_final)
 }
@@ -211,8 +211,10 @@ axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
 cmi <- seq(0.1, 0.9, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
 
-data <- expand.grid(X=cmi, Y=b_int)
+data_auc <- expand.grid(X=cmi, Y=b_int)
+data_mse <- expand.grid(X=cmi, Y=b_int)
 auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
 
 
 for (cmi in seq(from=0.1, to=0.9, by=0.1)) {
@@ -238,10 +240,15 @@ for (cmi in seq(from=0.1, to=0.9, by=0.1)) {
     fit <- glm(y.train ~ ., data = x.train, family = "binomial")
     y.pred <- predict(fit, x.test, type = "response")
     auc_table[cmi*10, b_int*10] <- auc(y.test, y.pred)
+    mse_table[cmi*10, b_int*10] <- mean((y.test-y.pred)^2)
   }
 }
 
-levelplot(auc_table ~ X*Y, data=data,
-          main="AUC",
-          xlab="cmi", ylab="b_int")
+auc_plot <- levelplot(auc_table ~ X*Y, data=data_auc,
+                      main="AUC",
+                      xlab="cmi", ylab="b_int")
+
+mse_plot <- levelplot(mse_table ~ X*Y, data=data_mse,
+                      main="Mean Squared Error",
+                      xlab="cmi", ylab="b_int")
 
