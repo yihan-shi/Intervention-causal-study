@@ -73,12 +73,12 @@ gen_outcome <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
   # lo: if outcome_no_intervention = 1 & intervention = 0 --> old outcome
   # ll: if outcome_no_intervention = 1 & intervention = 1 --> rbinom(n, 1, risks_t2)
 
-  # num_obs <- dim(condition)[1]
-  #
-  # df_final <- df %>%
-  #   mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
-  #                                rbinom(num_obs, 1, df$risk_t2),
-  #                                outcome_noint))
+  num_obs <- dim(condition)[1]
+
+  df_final <- df %>%
+    mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
+                                 rbinom(num_obs, 1, df$risk_t2),
+                                 outcome_noint))
 
 
   # 2. choose b_intervention% of the ppl (outcome_no_intervention = 1 & intervention = 1) to have
@@ -86,19 +86,19 @@ gen_outcome <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
 
   # choose (1-b_intervention)% as fraction who have effective treatment
   # b_intervention = 0.1 (very effective treatment), then 90% change their 1 to 0
-  effective <- sample_frac(condition, size = 1-b_intervention, replace = FALSE)
-  effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
-               outcome_noint %in% effective$outcome_noint &
-               cmi %in% effective$cmi &
-               risk_t2 %in% effective$risk_t2))
-
-  non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
-                                   outcome_noint %in% effective$outcome_noint &
-                                   cmi %in% effective$cmi &
-                                   risk_t2 %in% effective$risk_t2))
-  effective_df$outcome_int <- 0
-  non_effective_df$outcome_int <- non_effective_df$outcome_noint
-  df_final <- rbind(effective_df, non_effective_df)
+  # effective <- sample_frac(condition, size = 1-b_intervention, replace = FALSE)
+  # effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
+  #              outcome_noint %in% effective$outcome_noint &
+  #              cmi %in% effective$cmi &
+  #              risk_t2 %in% effective$risk_t2))
+  #
+  # non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
+  #                                  outcome_noint %in% effective$outcome_noint &
+  #                                  cmi %in% effective$cmi &
+  #                                  risk_t2 %in% effective$risk_t2))
+  # effective_df$outcome_int <- 0
+  # non_effective_df$outcome_int <- non_effective_df$outcome_noint
+  # df_final <- rbind(effective_df, non_effective_df)
 
   return (df_final)
 }
@@ -220,7 +220,6 @@ axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
 # heatmap -----------------------------------------------------------------
 cmi <- seq(0.1, 0.9, length.out=9)
 b_int <- seq(0.1, 0.9, length.out=9)
-
 
 data_auc <- expand.grid(X=cmi, Y=b_int)
 data_mse <- expand.grid(X=cmi, Y=b_int)

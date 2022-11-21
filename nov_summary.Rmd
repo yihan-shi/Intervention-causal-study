@@ -1,0 +1,566 @@
+---
+title: "Investigate the impact of Confounding Medical Interventions (CMI) in electronic health records (EHR) data"
+author: "Yihan Shi, Dr. Benjamin Goldstein"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+fig_width: 10
+fig_height: 8
+---
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+library(prodlim)
+library(pROC)
+library(predtools)
+library(boot)
+library("lattice")
+```
+
+```{r}
+set.seed(1)
+n <- 1000
+repeats <- 20 # for simulation
+cmi_cutoff <- 0.1
+b_intervention <- 0.1
+```
+
+## Background & Motivation
+
+Electronic health records (EHRs) data are widely used for clinical research. The abundance of available data, the low cost of obtaining those observational data, and its real-time nature have given EHR enormous potential to develop powerful predictive models. Researchers rely on EHR data extensively to predict the risk of clinical outcomes. As clinical prediction models (CPMs) find their way into clinical practice, it is important to develop systems and procedures to monitor their safety and effectiveness. The Food and Drug Administration (FDA) has developed draft guidance for how such tools should be considered. Within Duke University Health System, a governance framework has been developed for evaluating and monitoring the performance of CPMs to ensure their adequate performance. 
+
+After implementing a CPM, medical professionals will use these models to inform clinical decision-making and allocation of interventions. Ideally, the intervention will prevent the outcome that the CPM is predicting. This leads to an important challenge: how do we evaluate CPMs in the presence of interventions? If the CPM is accurate, and the intervention is effective, those who are truly at risk of the adverse outcome will not actually have the event. To evaluate the CPM appropriately, we are interested in what the causal inference refers to as the counter-factual: the outcome that would have occurred without the intervention being deployed. Unfortunately we do not observe this counter-factual.
+
+Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professional’s judgement). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and strategies we can use to mitigate these challenges. We will do this by first proposing a causal model. Next using simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
+
+## Methodology
+During the initial stage of investigation, we proposed 2 possible causal models.
+The basic components in the causal models are initial risk, intervention(1=intervention, 0=no intervention), and observed
+outcome (1=sick, 0=healthy). A patient with initial risk higher than the intervention cutoff ($CMI$) will receive intervention treatment. The effectiveness of treatment is decided by $b_{intervention}$. In general, a higher $b_{intervention}$ means lower effectiveness. What differentiates the 2 models is the mechanism to generate the final observed outcome with intervention. The first model decides a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and received intervention treatment. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider  risk after intervention. Instead, depending on the intervention effectiveness factor $b_{intervention}$, (1-$b_{intervention}$) % of the population will be assigned to have no outcome (healthy), which means their intervention is successful. 
+
+In real world, only the initial risk and observed outcome are known. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. The metric values (AUC, MSE, deviance, calibration curve slope) are averaged over 20 simulations. 
+
+## Causal diagram 1
+![Causal diagram 1](diagrams/f1.png)
+
+```{r}
+# generate risk_t1
+risk_t1 <- runif(n, 0, 1)
+```
+
+```{r}
+gen_outcome1 <- function(risk_t1, n = n){
+  outcome_noint <- rbinom(n, 1, 0.9 * risk_t1) # the constant vary to control true model AUC
+  df <- as.data.frame(cbind(risk_t1, outcome_noint))
+  return (df)
+}
+a <- gen_outcome1(risk_t1, n)
+ideal_auc <- auc(a$outcome_noint, a$risk_t1)
+```
+
+
+```{r}
+gen_cmi <- function(risk_t1, n = n, cmi_cutoff){
+  df <- gen_outcome1(risk_t1, n)
+  df <- df %>%
+    mutate(cmi = ifelse(risk_t1 > cmi_cutoff, 1, 0))
+
+  return (df)
+}
+
+
+gen_risk_t2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff){
+  # if cmi == 1 & outcome_noint == 1, then risk_t2 = risk_t1 * b_intervention
+  df <- gen_cmi(risk_t1, n, cmi_cutoff)
+  df <- df %>%
+    mutate(risk_t2 = ifelse((outcome_noint == 1 & cmi == 1),
+                            risk_t1 * b_intervention,
+                            risk_t1))
+  return (df)
+}
+  
+gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
+  df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff)
+  condition <- df %>%
+    filter(outcome_noint == 1 & cmi == 1)
+
+  # 1. generate all observed outcome probabilistically
+  # oo: if outcome_no_intervention = 0 & intervention = 0 --> old outcome
+  # ol: if outcome_no_intervention = 0 & intervention = 1 --> old outcome
+  # lo: if outcome_no_intervention = 1 & intervention = 0 --> old outcome
+  # ll: if outcome_no_intervention = 1 & intervention = 1 --> rbinom(n, 1, risks_t2)
+
+  num_obs <- dim(condition)[1]
+
+  df_final <- df %>%
+    mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
+                                 rbinom(num_obs, 1, df$risk_t2),
+                                 outcome_noint))
+
+  return (df_final)
+}
+```
+
+### vary b_intervention
+```{r}
+# vary b_intervention
+AUC.grid <- rep(NA, 10)
+MSE.grid <- rep(NA, 10)
+DEV.grid <- rep(NA, 10)
+for (i in 1:10) {
+  AUC_i <- 0
+  MSE_i <- 0
+  DEV_i <- 0
+  for (j in 1:repeats){
+    c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                   n,
+                                   b_intervention = i/10,
+                                   cmi_cutoff))
+    x <- c %>%
+      select(-outcome_int)
+    y <- c %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- sample(1:nrow(x), nrow(x)/2)
+    x.train <- x[train,]
+    y.train <- y[train,]
+
+    test <- (-train)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit_sum <- summary(fit)
+    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+    AUC_i = AUC_i + auc(y.test, y.pred)
+    MSE_i = MSE_i + mean(fit$residuals^2)
+    DEV_i =  DEV_i + mean(fit$deviance)
+    
+  }
+  # AUC
+  AUC.grid[i] <- AUC_i/repeats
+  MSE.grid[i] <- MSE_i/repeats
+  DEV.grid[i] <- DEV_i/repeats
+}
+
+plot(AUC.grid, xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+abline(h = ideal_auc, col = "red")
+
+plot(MSE.grid, xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(5, 30),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+
+plot(DEV.grid, xlab = "b_intervention", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+```
+
+The red line denotes the prediction accuracy when fitting the observed outcome on the initial risk. As the intervention effectiveness decreases, prediction accuracy increases. A strong treatment would make a poor prediction on a patient's final outcome. When the intervention effectiveness is the strongest, the AUC is around 0.5, meaning it's no better than flipping a coin. 
+
+The mean squared error (MSE) is $mean(fit\$residuals^2)$ (taking the difference between fitted and actual response values) where $fit$ is a glm function. It decreases as prediction accuracy increases.
+
+However, the deviance $mean(fit\$deviance)$increases as prediction accuracy increases. **Since we are fitting a logistic regression, deviance is the better evaluation metrics?** 
+
+
+### vary cmi_cutoff
+```{r}
+# vary cmi_cutoff
+cmi.grid <- rep(NA, 10)
+mse.grid <- rep(NA, 10)
+dev.grid <- rep(NA, 10)
+for (i in 1:10) {
+  cmi_i <- 0
+  mse_i <- 0
+  dev_i <- 0
+  for (j in 1:repeats){
+    c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                   n,
+                                   b_intervention,
+                                   cmi_cutoff = i/10))
+    x <- c %>%
+      select(-outcome_int)
+    y <- c %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- sample(1:nrow(x), nrow(x)/2)
+    x.train <- x[train,]
+    y.train <- y[train,]
+
+    test <- (-train)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit_sum <- summary(fit)
+    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+    cmi_i = cmi_i + auc(y.test, y.pred)
+    mse_i = mse_i + mean(fit$residuals^2)
+    dev_i = dev_i + mean(fit$deviance)
+    
+  }
+  # AUC
+  cmi.grid[i] <- cmi_i/repeats
+  mse.grid[i] <- mse_i/repeats
+  dev.grid[i] <- dev_i/repeats
+}
+
+plot(cmi.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.5, 1), type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+abline(h = ideal_auc, col = "red")
+
+plot(mse.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "MSE", ylim = c(5, 30),type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+
+plot(dev.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+```
+
+MSE and deviance show a similar trend when we vary the CMI_cutoff. Notice that the higher the cutoff, less people are getting the intervention.
+
+Varying CMI_cutoff shows a different trend from varying intervention effectiveness.To see a broader picture, we want to see how CMI_cutoff and intervention effectiveness interact to affect the metrics. 
+
+### varying b_int and cmi_cutoff
+
+```{r}
+cmi <- seq(0.1, 1, length.out=10)
+b_int <- seq(0.1, 1, length.out=10)
+
+data_auc <- expand.grid(X=cmi, Y=b_int)
+data_mse <- expand.grid(X=cmi, Y=b_int)
+data_dev <- expand.grid(X=cmi, Y=b_int)
+data_calibration <- expand.grid(X=cmi, Y=b_int)
+
+auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+dev_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+
+for (i in 1:10){
+  for (j in 1:10){
+    cur_auc <- 0
+    cur_mse <- 0
+    cur_dev <- 0
+    cur_calibration <- 0
+    for (k in 1:repeats){
+      c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                     n,
+                                     b_intervention = i/10,
+                                     cmi_cutoff = j/10))
+      x <- c %>%
+        select(-outcome_int)
+      y <- c %>%
+        select(outcome_int)
+
+      # train/test split
+      train <- sample(1:nrow(x), nrow(x)/2)
+      x.train <- x[train,]
+      y.train <- y[train,]
+
+      test <- (-train)
+      x.test <- x[test,]
+      y.test <- y[test,]
+
+      fit <- glm(y.train ~ risk_t1, data = x.train, family = "binomial")
+      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+
+      # update auc and mse
+      cur_auc = cur_auc + auc(y.test, y.pred)
+      cur_mse = cur_mse + mean(fit$residuals^2)
+      cur_dev = cur_mse + mean(fit$deviance)
+
+      test_data <- as.data.frame(cbind(y.test, y.pred))
+      calibration_fit <- lm(y.test ~ y.pred, data = test_data)
+
+      cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
+                                                 0, calibration_fit$coefficients[2])
+    }
+
+    auc_table[i,j] <- cur_auc/repeats
+    mse_table[i,j] <- cur_mse/repeats
+    dev_table[i,j] <- cur_dev/repeats
+    calibration_table[i,j] <- cur_calibration/repeats
+    # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
+  }
+}
+
+auc_plot <- levelplot(auc_table ~ X*Y, data=data_auc,
+                      main="AUC",
+                      xlab="b_int", ylab="cmi",
+                      col.regions = heat.colors(1000))
+auc_plot
+
+mse_plot <- levelplot(mse_table ~ X*Y, data=data_mse,
+                      main="Mean Squared Error",
+                      xlab="b_int", ylab="cmi",
+                      col.regions = heat.colors(1000))
+mse_plot
+
+dev_plot <- levelplot(dev_table ~ X*Y, data=data_mse,
+                      main="Deviance",
+                      xlab="b_int", ylab="cmi",
+                      col.regions = heat.colors(1000))
+dev_plot
+
+calibration_plot <- levelplot(calibration_table ~ X*Y, data=data_calibration,
+                              main="Calibration curve slope",
+                              xlab="b_int", ylab="cmi",
+                              col.regions = cm.colors(1000))
+calibration_plot
+```
+
+Moving from left to right, intervention effectiveness decreases, and AUC increases.
+Moving from bottom to top, if close to half of population receives treatment, the prediction performance is the worst. However, if almost everyone or no one receives treatment, we see better performance.
+
+MSE shows that as intervention effectiveness decreases or as less people receives treatment, there is less error in prediction.
+
+Deviance plot doesn't have a clear trend, but in general when less people receives treatment, deviance is higher.
+
+
+## Causal diagram 2
+![Causal diagram 2](diagrams/f2.png)
+
+```{r}
+gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
+    df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff)
+  condition <- df %>%
+    filter(outcome_noint == 1 & cmi == 1)
+
+  # 2. choose (1-b_intervention) % of the ppl (outcome_no_intervention = 1 & intervention = 1) to have
+  # outcome = 0
+
+  # i.e. b_intervention = 0.1 (very effective treatment), then 90% change their 1 to 0
+  effective <- sample_frac(condition, size = 1-b_intervention, replace = FALSE)
+  effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
+                               outcome_noint %in% effective$outcome_noint &
+                               cmi %in% effective$cmi &
+                               risk_t2 %in% effective$risk_t2))
+
+  non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
+                                    outcome_noint %in% effective$outcome_noint &
+                                    cmi %in% effective$cmi &
+                                    risk_t2 %in% effective$risk_t2))
+  effective_df$outcome_int <- 0
+  non_effective_df$outcome_int <- non_effective_df$outcome_noint
+  df_final <- rbind(effective_df, non_effective_df)
+
+  return (df_final)
+}
+```
+
+### vary b_intervention
+
+```{r}
+# vary b_intervention
+AUC.grid <- rep(NA, 9)
+MSE.grid <- rep(NA, 9)
+DEV.grid <- rep(NA, 9)
+for (i in 1:9) {
+  AUC_i <- 0
+  MSE_i <- 0
+  DEV_i <- 0
+  for (j in 1:repeats){
+    c <- as.data.frame(gen_outcome_f2(risk_t1,
+                                   n,
+                                   b_intervention = i/10,
+                                   cmi_cutoff))
+    x <- c %>%
+      select(-outcome_int)
+    y <- c %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- sample(1:nrow(x), nrow(x)/2)
+    x.train <- x[train,]
+    y.train <- y[train,]
+
+    test <- (-train)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit_sum <- summary(fit)
+    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+    AUC_i = AUC_i + auc(y.test, y.pred)
+    MSE_i = MSE_i + mean(fit$residuals^2)
+    DEV_i =  DEV_i + mean(fit$deviance)
+    
+  }
+  # AUC
+  AUC.grid[i] <- AUC_i/repeats
+  MSE.grid[i] <- MSE_i/repeats
+  DEV.grid[i] <- DEV_i/repeats
+}
+
+plot(AUC.grid, xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+abline(h = ideal_auc, col = "red")
+
+
+plot(MSE.grid, xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(5, 30),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+
+plot(DEV.grid, xlab = "b_intervention", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+```
+In the second causal model, the AUC as intervention almost change nothing, is close to the ideal AUC. Therefore, this generating mechanism might be better.
+
+MSE shows same trend, deviance doesn't really have a trend.
+
+### vary cmi_cutoff
+```{r}
+# vary cmi_cutoff
+cmi.grid <- rep(NA, 9)
+mse.grid <- rep(NA, 9)
+dev.grid <- rep(NA, 9)
+for (i in 1:9) {
+  cmi_i <- 0
+  mse_i <- 0
+  dev_i <- 0
+  for (j in 1:repeats){
+    c <- as.data.frame(gen_outcome_f2(risk_t1,
+                                   n,
+                                   b_intervention = i/10,
+                                   cmi_cutoff))
+    x <- c %>%
+      select(-outcome_int)
+    y <- c %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- sample(1:nrow(x), nrow(x)/2)
+    x.train <- x[train,]
+    y.train <- y[train,]
+
+    test <- (-train)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit_sum <- summary(fit)
+    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+    cmi_i = cmi_i + auc(y.test, y.pred)
+    mse_i = mse_i + mean(fit$residuals^2)
+    dev_i =  dev_i + mean(fit$deviance)
+    
+  }
+  # AUC
+  cmi.grid[i] <- cmi_i/repeats
+  mse.grid[i] <- mse_i/repeats
+  dev.grid[i] <- dev_i/repeats
+}
+
+plot(cmi.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.5, 1), type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+abline(h = ideal_auc, col = "red")
+
+plot(mse.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "MSE", ylim = c(1, 30),type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+
+plot(dev.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("b_intervention =", b_intervention))
+axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+```
+
+Compared to the previous mechanism, the AUC trend makes more sense: as less people
+receives treatment, the prediction performance is closer to the direct relationship between fitting outcome on risk_t1.
+
+### vary both b_intervention and cmi_cutoff
+```{r}
+cmi <- seq(0.1, 0.9, length.out=9)
+b_int <- seq(0.1, 0.9, length.out=9)
+
+data_auc <- expand.grid(X=cmi, Y=b_int)
+data_mse <- expand.grid(X=cmi, Y=b_int)
+data_dev <- expand.grid(X=cmi, Y=b_int)
+data_calibration <- expand.grid(X=cmi, Y=b_int)
+
+auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+dev_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+
+for (i in 1:9){
+  for (j in 1:9){
+    cur_auc <- 0
+    cur_mse <- 0
+    cur_dev <- 0
+    cur_calibration <- 0
+    for (k in 1:repeats){
+      c <- as.data.frame(gen_outcome_f2(risk_t1,
+                                     n,
+                                     b_intervention = i/10,
+                                     cmi_cutoff = j/10))
+      x <- c %>%
+        select(-outcome_int)
+      y <- c %>%
+        select(outcome_int)
+
+      # train/test split
+      train <- sample(1:nrow(x), nrow(x)/2)
+      x.train <- x[train,]
+      y.train <- y[train,]
+
+      test <- (-train)
+      x.test <- x[test,]
+      y.test <- y[test,]
+
+      fit <- glm(y.train ~ risk_t1, data = x.train, family = "binomial")
+      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+
+      # update auc and mse
+      cur_auc = cur_auc + auc(y.test, y.pred)
+      cur_mse = cur_mse + mean(fit$residuals^2)
+      cur_dev = cur_mse + fit$deviance
+
+      test_data <- as.data.frame(cbind(y.test, y.pred))
+      calibration_fit <- lm(y.test ~ y.pred, data = test_data)
+
+      cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
+                                                 0, calibration_fit$coefficients[2])
+    }
+
+    auc_table[i,j] <- cur_auc/repeats
+    mse_table[i,j] <- cur_mse/repeats
+    dev_table[i,j] <- cur_dev/repeats
+    calibration_table[i,j] <- cur_calibration/repeats
+    # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
+  }
+}
+
+auc_plot <- levelplot(auc_table ~ X*Y, data=data_auc,
+                      main="AUC",
+                      xlab="b_int", ylab="cmi",
+                      col.regions = heat.colors(1000))
+auc_plot
+
+mse_plot <- levelplot(mse_table ~ X*Y, data=data_mse,
+                      main="Mean Squared Error",
+                      xlab="b_int", ylab="cmi",
+                      col.regions = heat.colors(1000))
+mse_plot
+
+dev_plot <- levelplot(dev_table ~ X*Y, data=data_mse,
+                      main="Deviance",
+                      xlab="b_int", ylab="cmi",
+                      col.regions = heat.colors(1000))
+dev_plot
+
+calibration_plot <- levelplot(calibration_table ~ X*Y, data=data_calibration,
+                              main="Calibration curve slope",
+                              xlab="b_int", ylab="cmi",
+                              col.regions = cm.colors(1000))
+calibration_plot
+```
+
+
+
+
+
