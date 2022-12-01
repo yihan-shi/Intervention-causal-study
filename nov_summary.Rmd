@@ -41,7 +41,7 @@ After implementing a CPM, medical professionals will use these models to inform 
 
 Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professional’s judgement). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and strategies we can use to mitigate these challenges. We will do this by first proposing a causal model. Next using simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
 
-## Methodology
+## Exploratory analysis
 During the initial stage of investigation, we proposed 2 possible causal models.
 The basic components in the causal models are initial risk, intervention(1=intervention, 0=no intervention), and observed
 outcome (1=sick, 0=healthy). A patient with initial risk higher than the intervention cutoff ($CMI$) will receive intervention treatment. The effectiveness of treatment is decided by $b_{intervention}$. In general, a higher $b_{intervention}$ means lower effectiveness. What differentiates the 2 models is the mechanism to generate the final observed outcome with intervention. The first model decides a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and received intervention treatment. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider  risk after intervention. Instead, depending on the intervention effectiveness factor $b_{intervention}$, (1-$b_{intervention}$) % of the population will be assigned to have no outcome (healthy), which means their intervention is successful. 
@@ -138,7 +138,7 @@ for (i in 1:10) {
     x.test <- x[test,]
     y.test <- y[test,]
 
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
     fit_sum <- summary(fit)
     y.pred <- predict(fit, as.data.frame(x.test), type = "response")
     AUC_i = AUC_i + auc(y.test, y.pred)
@@ -199,7 +199,7 @@ for (i in 1:10) {
     x.test <- x[test,]
     y.test <- y[test,]
 
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
     fit_sum <- summary(fit)
     y.pred <- predict(fit, as.data.frame(x.test), type = "response")
     cmi_i = cmi_i + auc(y.test, y.pred)
@@ -269,7 +269,7 @@ for (i in 1:10){
       x.test <- x[test,]
       y.test <- y[test,]
 
-      fit <- glm(y.train ~ risk_t1, data = x.train, family = "binomial")
+      fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
       y.pred <- predict(fit, as.data.frame(x.test), type = "response")
 
       # update auc and mse
@@ -280,8 +280,9 @@ for (i in 1:10){
       test_data <- as.data.frame(cbind(y.test, y.pred))
       calibration_fit <- lm(y.test ~ y.pred, data = test_data)
 
-      cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
-                                                 0, calibration_fit$coefficients[2])
+      # cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
+      #                                            0, calibration_fit$coefficients[2])
+      cur_calibration = cur_calibration + calibration_fit$coefficients[2]
     }
 
     auc_table[i,j] <- cur_auc/repeats
@@ -386,7 +387,7 @@ for (i in 1:9) {
     x.test <- x[test,]
     y.test <- y[test,]
 
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
     fit_sum <- summary(fit)
     y.pred <- predict(fit, as.data.frame(x.test), type = "response")
     AUC_i = AUC_i + auc(y.test, y.pred)
@@ -444,7 +445,7 @@ for (i in 1:9) {
     x.test <- x[test,]
     y.test <- y[test,]
 
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = "binomial")
+    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
     fit_sum <- summary(fit)
     y.pred <- predict(fit, as.data.frame(x.test), type = "response")
     cmi_i = cmi_i + auc(y.test, y.pred)
@@ -512,7 +513,7 @@ for (i in 1:9){
       x.test <- x[test,]
       y.test <- y[test,]
 
-      fit <- glm(y.train ~ risk_t1, data = x.train, family = "binomial")
+      fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
       y.pred <- predict(fit, as.data.frame(x.test), type = "response")
 
       # update auc and mse
@@ -523,8 +524,9 @@ for (i in 1:9){
       test_data <- as.data.frame(cbind(y.test, y.pred))
       calibration_fit <- lm(y.test ~ y.pred, data = test_data)
 
-      cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
-                                                 0, calibration_fit$coefficients[2])
+      # cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
+      #                                            0, calibration_fit$coefficients[2])
+      cur_calibration = cur_calibration + calibration_fit$coefficients[2]
     }
 
     auc_table[i,j] <- cur_auc/repeats
@@ -559,8 +561,55 @@ calibration_plot <- levelplot(calibration_table ~ X*Y, data=data_calibration,
                               col.regions = cm.colors(1000))
 calibration_plot
 ```
+**Is this the correct way to find calibration slope?**
+Some calibration curve slope have negative slope (see below). The way I find calibration slope is 
+calibration fit = lm(y.test ~ y.pred, data = data_test)
+slope = calibration fit\$coefficients[2]
 
+```{r}
+c <- as.data.frame(gen_outcome_f2(risk_t1,
+                                     n,
+                                     b_intervention = 0.2,
+                                     cmi_cutoff = 0.4))
+x <- c %>%
+  select(-outcome_int)
+y <- c %>%
+  select(outcome_int)
 
+# train/test split
+train <- sample(1:nrow(x), nrow(x)/2)
+x.train <- x[train,]
+y.train <- y[train,]
 
+test <- (-train)
+x.test <- x[test,]
+y.test <- y[test,]
 
+# fit logistic regression
+fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
 
+# Evaluate-----------------------------------------------------------------------
+y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+```
+
+```{r}
+# calibration
+test_data <- as.data.frame(cbind(y.test, y.pred))
+calibration_fit <- lm(y.test ~ y.pred, data = test_data)
+slope <- calibration_fit$coefficients[2]
+
+ggplot(data = test_data,aes(x = y.pred, y = y.test)) +
+  xlim(0,1) +
+  ylim(0,1) +
+  geom_point()+
+  geom_smooth(method = lm, se = FALSE)+
+  geom_abline(intercept = 0, slope = 1, color = "red")
+```
+
+## Research question
+From the exploratory analysis, we found that as the impact (either effectiveness or coverage) of intervention treatment increase, the predictive power of our glm model has decreased.
+
+What to do next - with the goal being improving predictive power
+* explore other classification model other than glm, such as random forest or boosting
+* As treatment become stronger, there end up to be fewer positive samples. Maybe we can try upweighing positive samples as we increase the power of treatment
+* decomposition total effect into direct and indirect effects
