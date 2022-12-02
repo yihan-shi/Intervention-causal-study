@@ -17,7 +17,7 @@ repeats <- 20
 risk_t1 <- runif(n, 0, 1)
 
 # intervention
-cmi_cutoff <- 0.5
+cmi_cutoff <- 0.2
 
 # intervention effectiveness/probability of the intervention works (fixed, varies in different trials)
 # b_intervention <- c(seq(0, 1, 0.1)) # set to 1  for null case

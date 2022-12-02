@@ -29,7 +29,7 @@ library("lattice")
 set.seed(1)
 n <- 1000
 repeats <- 20 # for simulation
-cmi_cutoff <- 0.1
+cmi_cutoff <- 0.2
 b_intervention <- 0.1
 ```
 
@@ -57,29 +57,31 @@ risk_t1 <- runif(n, 0, 1)
 ```
 
 ```{r}
-gen_outcome1 <- function(risk_t1, n = n){
-  outcome_noint <- rbinom(n, 1, 0.9 * risk_t1) # the constant vary to control true model AUC
+gen_outcome1 <- function(risk_t1, n = n, prevalence){
+  # outcome_noint <- rbinom(n, 1,0.9 * risk_t1) 
+  outcome_noint <- rbinom(n, 1, prevalence * risk_t1)  
   df <- as.data.frame(cbind(risk_t1, outcome_noint))
   return (df)
 }
-a <- gen_outcome1(risk_t1, n)
+a <- gen_outcome1(risk_t1, n, prevalence=1)
+mean(a$outcome_noint)
 ideal_auc <- auc(a$outcome_noint, a$risk_t1)
+ideal_auc
 ```
 
 
 ```{r}
-gen_cmi <- function(risk_t1, n = n, cmi_cutoff){
-  df <- gen_outcome1(risk_t1, n)
+gen_cmi <- function(risk_t1, n = n, cmi_cutoff, prevalence){
+  df <- gen_outcome1(risk_t1, n, prevalence)
   df <- df %>%
     mutate(cmi = ifelse(risk_t1 > cmi_cutoff, 1, 0))
 
   return (df)
 }
 
-
-gen_risk_t2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff){
+gen_risk_t2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff, prevalence){
   # if cmi == 1 & outcome_noint == 1, then risk_t2 = risk_t1 * b_intervention
-  df <- gen_cmi(risk_t1, n, cmi_cutoff)
+  df <- gen_cmi(risk_t1, n, cmi_cutoff, prevalence)
   df <- df %>%
     mutate(risk_t2 = ifelse((outcome_noint == 1 & cmi == 1),
                             risk_t1 * b_intervention,
@@ -87,8 +89,8 @@ gen_risk_t2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff){
   return (df)
 }
   
-gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
-  df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff)
+gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence){
+  df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff, prevalence)
   condition <- df %>%
     filter(outcome_noint == 1 & cmi == 1)
 
@@ -112,56 +114,59 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
 ### vary b_intervention
 ```{r}
 # vary b_intervention
-AUC.grid <- rep(NA, 10)
-MSE.grid <- rep(NA, 10)
-DEV.grid <- rep(NA, 10)
-for (i in 1:10) {
-  AUC_i <- 0
-  MSE_i <- 0
-  DEV_i <- 0
-  for (j in 1:repeats){
-    c <- as.data.frame(gen_outcome_f1(risk_t1,
-                                   n,
-                                   b_intervention = i/10,
-                                   cmi_cutoff))
-    x <- c %>%
-      select(-outcome_int)
-    y <- c %>%
-      select(outcome_int)
-
-    # train/test split
-    train <- sample(1:nrow(x), nrow(x)/2)
-    x.train <- x[train,]
-    y.train <- y[train,]
-
-    test <- (-train)
-    x.test <- x[test,]
-    y.test <- y[test,]
-
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
-    fit_sum <- summary(fit)
-    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-    AUC_i = AUC_i + auc(y.test, y.pred)
-    MSE_i = MSE_i + mean(fit$residuals^2)
-    DEV_i =  DEV_i + mean(fit$deviance)
-    
+AUC_list <- list()
+MSE_list <- list()
+for (p in 1:3){
+  AUC.grid <- rep(NA, 10)
+  MSE.grid <- rep(NA, 10)
+  for (i in 1:10) {
+    AUC_i <- 0
+    MSE_i <- 0
+    for (j in 1:repeats){
+      c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                     n,
+                                     b_intervention = i/10,
+                                     cmi_cutoff,
+                                     prevalence = p/3))
+      x <- c %>%
+        select(-outcome_int)
+      y <- c %>%
+        select(outcome_int)
+      # train/test split
+      train <- sample(1:nrow(x), nrow(x)/2)
+      x.train <- x[train,]
+      y.train <- y[train,]
+      test <- (-train)
+      x.test <- x[test,]
+      y.test <- y[test,]
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
+      fit_sum <- summary(fit)
+      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+      AUC_i = AUC_i + auc(y.test, y.pred)
+      MSE_i = MSE_i + mean(fit$residuals^2)
+    }
+    # AUC
+    AUC.grid[i] <- AUC_i/repeats
+    MSE.grid[i] <- MSE_i/repeats
   }
-  # AUC
-  AUC.grid[i] <- AUC_i/repeats
-  MSE.grid[i] <- MSE_i/repeats
-  DEV.grid[i] <- DEV_i/repeats
+  AUC_list[[p]] <- AUC.grid
+  MSE_list[[p]] <- MSE.grid
 }
 
-plot(AUC.grid, xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-abline(h = ideal_auc, col = "red")
+prev <- c("low", "mid", "high")
 
-plot(MSE.grid, xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(5, 30),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+for (p in 1:3){
+  plot(AUC_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+  abline(h = ideal_auc, col = "red")
+}
 
-plot(DEV.grid, xlab = "b_intervention", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+for (p in 1:3){
+  plot(MSE_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(0, 25),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+}
 ```
+
 
 The red line denotes the prediction accuracy when fitting the observed outcome on the initial risk. As the intervention effectiveness decreases, prediction accuracy increases. A strong treatment would make a poor prediction on a patient's final outcome. When the intervention effectiveness is the strongest, the AUC is around 0.5, meaning it's no better than flipping a coin. 
 
@@ -173,55 +178,58 @@ However, the deviance $mean(fit\$deviance)$increases as prediction accuracy incr
 ### vary cmi_cutoff
 ```{r}
 # vary cmi_cutoff
-cmi.grid <- rep(NA, 10)
-mse.grid <- rep(NA, 10)
-dev.grid <- rep(NA, 10)
-for (i in 1:10) {
-  cmi_i <- 0
-  mse_i <- 0
-  dev_i <- 0
-  for (j in 1:repeats){
-    c <- as.data.frame(gen_outcome_f1(risk_t1,
-                                   n,
-                                   b_intervention,
-                                   cmi_cutoff = i/10))
-    x <- c %>%
-      select(-outcome_int)
-    y <- c %>%
-      select(outcome_int)
-
-    # train/test split
-    train <- sample(1:nrow(x), nrow(x)/2)
-    x.train <- x[train,]
-    y.train <- y[train,]
-
-    test <- (-train)
-    x.test <- x[test,]
-    y.test <- y[test,]
-
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
-    fit_sum <- summary(fit)
-    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-    cmi_i = cmi_i + auc(y.test, y.pred)
-    mse_i = mse_i + mean(fit$residuals^2)
-    dev_i = dev_i + mean(fit$deviance)
-    
+auc_list <- list()
+mse_list <- list()
+for (p in 1:3){
+  cmi.grid <- rep(NA, 10)
+  mse.grid <- rep(NA, 10)
+  for (i in 1:10) {
+    cmi_i <- 0
+    mse_i <- 0
+    for (j in 1:repeats){
+      c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                     n,
+                                     b_intervention,
+                                     cmi_cutoff = i/10,
+                                     prevalence = p/3))
+      x <- c %>%
+        select(-outcome_int)
+      y <- c %>%
+        select(outcome_int)
+  
+      # train/test split
+      train <- sample(1:nrow(x), nrow(x)/2)
+      x.train <- x[train,]
+      y.train <- y[train,]
+  
+      test <- (-train)
+      x.test <- x[test,]
+      y.test <- y[test,]
+  
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
+      fit_sum <- summary(fit)
+      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+      cmi_i = cmi_i + auc(y.test, y.pred)
+      mse_i = mse_i + mean(fit$residuals^2)
+    }
+    # AUC
+    cmi.grid[i] <- cmi_i/repeats
+    mse.grid[i] <- mse_i/repeats
   }
-  # AUC
-  cmi.grid[i] <- cmi_i/repeats
-  mse.grid[i] <- mse_i/repeats
-  dev.grid[i] <- dev_i/repeats
+  auc_list[[p]] <- cmi.grid
+  mse_list[[p]] <- mse.grid
 }
 
-plot(cmi.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.5, 1), type = "b", sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-abline(h = ideal_auc, col = "red")
+for (p in 1:3){
+  plot(auc_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+  abline(h = ideal_auc, col = "red")
+}
 
-plot(mse.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "MSE", ylim = c(5, 30),type = "b", sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-
-plot(dev.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+for (p in 1:3){
+  plot(mse_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(0, 40),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+}
 ```
 
 MSE and deviance show a similar trend when we vary the CMI_cutoff. Notice that the higher the cutoff, less people are getting the intervention.
@@ -234,88 +242,99 @@ Varying CMI_cutoff shows a different trend from varying intervention effectivene
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
 
-data_auc <- expand.grid(X=cmi, Y=b_int)
-data_mse <- expand.grid(X=cmi, Y=b_int)
-data_dev <- expand.grid(X=cmi, Y=b_int)
-data_calibration <- expand.grid(X=cmi, Y=b_int)
+aucgrid_list <- list()
+msegrid_list <- list()
+calibrationgrid_list <- list()
 
-auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-dev_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-
-for (i in 1:10){
-  for (j in 1:10){
-    cur_auc <- 0
-    cur_mse <- 0
-    cur_dev <- 0
-    cur_calibration <- 0
-    for (k in 1:repeats){
-      c <- as.data.frame(gen_outcome_f1(risk_t1,
-                                     n,
-                                     b_intervention = i/10,
-                                     cmi_cutoff = j/10))
-      x <- c %>%
-        select(-outcome_int)
-      y <- c %>%
-        select(outcome_int)
-
-      # train/test split
-      train <- sample(1:nrow(x), nrow(x)/2)
-      x.train <- x[train,]
-      y.train <- y[train,]
-
-      test <- (-train)
-      x.test <- x[test,]
-      y.test <- y[test,]
-
-      fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
-      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-
-      # update auc and mse
-      cur_auc = cur_auc + auc(y.test, y.pred)
-      cur_mse = cur_mse + mean(fit$residuals^2)
-      cur_dev = cur_mse + mean(fit$deviance)
-
-      test_data <- as.data.frame(cbind(y.test, y.pred))
-      calibration_fit <- lm(y.test ~ y.pred, data = test_data)
-
-      # cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
-      #                                            0, calibration_fit$coefficients[2])
-      cur_calibration = cur_calibration + calibration_fit$coefficients[2]
+for (p in 1:3){
+  data_auc <- expand.grid(X=cmi, Y=b_int)
+  data_mse <- expand.grid(X=cmi, Y=b_int)
+  data_calibration <- expand.grid(X=cmi, Y=b_int)
+  
+  auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  
+  for (i in 1:10){
+    for (j in 1:10){
+      cur_auc <- 0
+      cur_mse <- 0
+      cur_calibration <- 0
+      for (k in 1:repeats){
+        c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = i/10,
+                                       cmi_cutoff = j/10,
+                                       prevalence = p/3))
+        x <- c %>%
+          select(-outcome_int)
+        y <- c %>%
+          select(outcome_int)
+  
+        # train/test split
+        train <- sample(1:nrow(x), nrow(x)/2)
+        x.train <- x[train,]
+        y.train <- y[train,]
+  
+        test <- (-train)
+        x.test <- x[test,]
+        y.test <- y[test,]
+  
+        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
+        y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+  
+        # update auc and mse
+        cur_auc = cur_auc + auc(y.test, y.pred)
+        cur_mse = cur_mse + mean(fit$residuals^2)
+  
+        test_data <- as.data.frame(cbind(y.test, y.pred))
+        calibration_fit <- lm(y.test ~ y.pred, data = test_data)
+  
+        # cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
+        #                                            0, calibration_fit$coefficients[2])
+        cur_calibration = cur_calibration + calibration_fit$coefficients[2]
+      }
+  
+      auc_table[i,j] <- cur_auc/repeats
+      mse_table[i,j] <- cur_mse/repeats
+      calibration_table[i,j] <- cur_calibration/repeats
+      # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
     }
-
-    auc_table[i,j] <- cur_auc/repeats
-    mse_table[i,j] <- cur_mse/repeats
-    dev_table[i,j] <- cur_dev/repeats
-    calibration_table[i,j] <- cur_calibration/repeats
-    # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
   }
+  aucgrid_list[[p]] <- auc_table
+  msegrid_list[[p]] <- mse_table
+  calibrationgrid_list[[p]] <- calibration_table
 }
 
-auc_plot <- levelplot(auc_table ~ X*Y, data=data_auc,
-                      main="AUC",
-                      xlab="b_int", ylab="cmi",
-                      col.regions = heat.colors(1000))
-auc_plot
+auc_heatmap <- list()
+for (p in 1:3){
+  auc_heatmap[[p]] <- levelplot(aucgrid_list[[p]] ~ X*Y, data=data_auc,
+                        main="AUC",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+auc_heatmap
 
-mse_plot <- levelplot(mse_table ~ X*Y, data=data_mse,
-                      main="Mean Squared Error",
-                      xlab="b_int", ylab="cmi",
-                      col.regions = heat.colors(1000))
-mse_plot
+mse_heatmap <- list()
+for (p in 1:3){
+  mse_heatmap[[p]] <- levelplot(msegrid_list[[p]] ~ X*Y, data=data_mse,
+                        main="Mean Squared Error",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+mse_heatmap
 
-dev_plot <- levelplot(dev_table ~ X*Y, data=data_mse,
-                      main="Deviance",
-                      xlab="b_int", ylab="cmi",
-                      col.regions = heat.colors(1000))
-dev_plot
-
-calibration_plot <- levelplot(calibration_table ~ X*Y, data=data_calibration,
-                              main="Calibration curve slope",
-                              xlab="b_int", ylab="cmi",
-                              col.regions = cm.colors(1000))
-calibration_plot
+calibration_heatmap <- list()
+for (p in 1:3){
+  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]]  ~ X*Y, data=data_calibration,
+                                main="Calibration curve slope",
+                                xlab="b_int", ylab="cmi",
+                                col.regions = cm.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+calibration_heatmap
 ```
 
 Moving from left to right, intervention effectiveness decreases, and AUC increases.
@@ -330,8 +349,8 @@ Deviance plot doesn't have a clear trend, but in general when less people receiv
 ![Causal diagram 2](diagrams/f2.png)
 
 ```{r}
-gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
-    df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff)
+gen_outcome_f2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff,prevalence){
+    df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff,prevalence)
   condition <- df %>%
     filter(outcome_noint == 1 & cmi == 1)
 
@@ -361,56 +380,57 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,cmi_cutoff){
 
 ```{r}
 # vary b_intervention
-AUC.grid <- rep(NA, 9)
-MSE.grid <- rep(NA, 9)
-DEV.grid <- rep(NA, 9)
-for (i in 1:9) {
-  AUC_i <- 0
-  MSE_i <- 0
-  DEV_i <- 0
-  for (j in 1:repeats){
-    c <- as.data.frame(gen_outcome_f2(risk_t1,
-                                   n,
-                                   b_intervention = i/10,
-                                   cmi_cutoff))
-    x <- c %>%
-      select(-outcome_int)
-    y <- c %>%
-      select(outcome_int)
-
-    # train/test split
-    train <- sample(1:nrow(x), nrow(x)/2)
-    x.train <- x[train,]
-    y.train <- y[train,]
-
-    test <- (-train)
-    x.test <- x[test,]
-    y.test <- y[test,]
-
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
-    fit_sum <- summary(fit)
-    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-    AUC_i = AUC_i + auc(y.test, y.pred)
-    MSE_i = MSE_i + mean(fit$residuals^2)
-    DEV_i =  DEV_i + mean(fit$deviance)
-    
+AUC_list <- list()
+MSE_list <- list()
+for (p in 1:3){
+  AUC.grid <- rep(NA, 9)
+  MSE.grid <- rep(NA, 9)
+  for (i in 1:9) {
+    AUC_i <- 0
+    MSE_i <- 0
+    for (j in 1:repeats){
+      c <- as.data.frame(gen_outcome_f2(risk_t1,
+                                     n,
+                                     b_intervention = i/10,
+                                     cmi_cutoff,
+                                     prevalence = p/3))
+      x <- c %>%
+        select(-outcome_int)
+      y <- c %>%
+        select(outcome_int)
+      # train/test split
+      train <- sample(1:nrow(x), nrow(x)/2)
+      x.train <- x[train,]
+      y.train <- y[train,]
+      test <- (-train)
+      x.test <- x[test,]
+      y.test <- y[test,]
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
+      fit_sum <- summary(fit)
+      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+      AUC_i = AUC_i + auc(y.test, y.pred)
+      MSE_i = MSE_i + mean(fit$residuals^2)
+    }
+    # AUC
+    AUC.grid[i] <- AUC_i/repeats
+    MSE.grid[i] <- MSE_i/repeats
   }
-  # AUC
-  AUC.grid[i] <- AUC_i/repeats
-  MSE.grid[i] <- MSE_i/repeats
-  DEV.grid[i] <- DEV_i/repeats
+  AUC_list[[p]] <- AUC.grid
+  MSE_list[[p]] <- MSE.grid
 }
 
-plot(AUC.grid, xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-abline(h = ideal_auc, col = "red")
+prev <- c("low", "mid", "high")
 
+for (p in 1:3){
+  plot(AUC_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+  abline(h = ideal_auc, col = "red")
+}
 
-plot(MSE.grid, xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(5, 30),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-
-plot(DEV.grid, xlab = "b_intervention", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("cmi_cutoff =", cmi_cutoff))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+for (p in 1:3){
+  plot(MSE_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(0, 60),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+}
 ```
 In the second causal model, the AUC as intervention almost change nothing, is close to the ideal AUC. Therefore, this generating mechanism might be better.
 
@@ -419,55 +439,58 @@ MSE shows same trend, deviance doesn't really have a trend.
 ### vary cmi_cutoff
 ```{r}
 # vary cmi_cutoff
-cmi.grid <- rep(NA, 9)
-mse.grid <- rep(NA, 9)
-dev.grid <- rep(NA, 9)
-for (i in 1:9) {
-  cmi_i <- 0
-  mse_i <- 0
-  dev_i <- 0
-  for (j in 1:repeats){
-    c <- as.data.frame(gen_outcome_f2(risk_t1,
-                                   n,
-                                   b_intervention = i/10,
-                                   cmi_cutoff))
-    x <- c %>%
-      select(-outcome_int)
-    y <- c %>%
-      select(outcome_int)
-
-    # train/test split
-    train <- sample(1:nrow(x), nrow(x)/2)
-    x.train <- x[train,]
-    y.train <- y[train,]
-
-    test <- (-train)
-    x.test <- x[test,]
-    y.test <- y[test,]
-
-    fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
-    fit_sum <- summary(fit)
-    y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-    cmi_i = cmi_i + auc(y.test, y.pred)
-    mse_i = mse_i + mean(fit$residuals^2)
-    dev_i =  dev_i + mean(fit$deviance)
-    
+auc_list <- list()
+mse_list <- list()
+for (p in 1:3){
+  cmi.grid <- rep(NA, 9)
+  mse.grid <- rep(NA, 9)
+  for (i in 1:9) {
+    cmi_i <- 0
+    mse_i <- 0
+    for (j in 1:repeats){
+      c <- as.data.frame(gen_outcome_f2(risk_t1,
+                                     n,
+                                     b_intervention,
+                                     cmi_cutoff = i/10,
+                                     prevalence = p/3))
+      x <- c %>%
+        select(-outcome_int)
+      y <- c %>%
+        select(outcome_int)
+  
+      # train/test split
+      train <- sample(1:nrow(x), nrow(x)/2)
+      x.train <- x[train,]
+      y.train <- y[train,]
+  
+      test <- (-train)
+      x.test <- x[test,]
+      y.test <- y[test,]
+  
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial(link = "logit"))
+      fit_sum <- summary(fit)
+      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+      cmi_i = cmi_i + auc(y.test, y.pred)
+      mse_i = mse_i + mean(fit$residuals^2)
+    }
+    # AUC
+    cmi.grid[i] <- cmi_i/repeats
+    mse.grid[i] <- mse_i/repeats
   }
-  # AUC
-  cmi.grid[i] <- cmi_i/repeats
-  mse.grid[i] <- mse_i/repeats
-  dev.grid[i] <- dev_i/repeats
+  auc_list[[p]] <- cmi.grid
+  mse_list[[p]] <- mse.grid
 }
 
-plot(cmi.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.5, 1), type = "b", sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-abline(h = ideal_auc, col = "red")
+for (p in 1:3){
+  plot(auc_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+  abline(h = ideal_auc, col = "red")
+}
 
-plot(mse.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "MSE", ylim = c(1, 30),type = "b", sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-
-plot(dev.grid, xlab = "CMI_cutoff", xaxt = "n", ylab = "Deviance", ylim = c(0, 600),type = "b", sub = paste0("b_intervention =", b_intervention))
-axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+for (p in 1:3){
+  plot(mse_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(0, 80),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
+}
 ```
 
 Compared to the previous mechanism, the AUC trend makes more sense: as less people
@@ -475,91 +498,102 @@ receives treatment, the prediction performance is closer to the direct relations
 
 ### vary both b_intervention and cmi_cutoff
 ```{r}
-cmi <- seq(0.1, 0.9, length.out=9)
-b_int <- seq(0.1, 0.9, length.out=9)
+cmi <- seq(0.1, 1, length.out=10)
+b_int <- seq(0.1, 1, length.out=10)
 
-data_auc <- expand.grid(X=cmi, Y=b_int)
-data_mse <- expand.grid(X=cmi, Y=b_int)
-data_dev <- expand.grid(X=cmi, Y=b_int)
-data_calibration <- expand.grid(X=cmi, Y=b_int)
+aucgrid_list <- list()
+msegrid_list <- list()
+calibrationgrid_list <- list()
 
-auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-dev_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
-
-for (i in 1:9){
-  for (j in 1:9){
-    cur_auc <- 0
-    cur_mse <- 0
-    cur_dev <- 0
-    cur_calibration <- 0
-    for (k in 1:repeats){
-      c <- as.data.frame(gen_outcome_f2(risk_t1,
-                                     n,
-                                     b_intervention = i/10,
-                                     cmi_cutoff = j/10))
-      x <- c %>%
-        select(-outcome_int)
-      y <- c %>%
-        select(outcome_int)
-
-      # train/test split
-      train <- sample(1:nrow(x), nrow(x)/2)
-      x.train <- x[train,]
-      y.train <- y[train,]
-
-      test <- (-train)
-      x.test <- x[test,]
-      y.test <- y[test,]
-
-      fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
-      y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-
-      # update auc and mse
-      cur_auc = cur_auc + auc(y.test, y.pred)
-      cur_mse = cur_mse + mean(fit$residuals^2)
-      cur_dev = cur_mse + fit$deviance
-
-      test_data <- as.data.frame(cbind(y.test, y.pred))
-      calibration_fit <- lm(y.test ~ y.pred, data = test_data)
-
-      # cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
-      #                                            0, calibration_fit$coefficients[2])
-      cur_calibration = cur_calibration + calibration_fit$coefficients[2]
+for (p in 1:3){
+  data_auc <- expand.grid(X=cmi, Y=b_int)
+  data_mse <- expand.grid(X=cmi, Y=b_int)
+  data_calibration <- expand.grid(X=cmi, Y=b_int)
+  
+  auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  
+  for (i in 1:10){
+    for (j in 1:10){
+      cur_auc <- 0
+      cur_mse <- 0
+      cur_calibration <- 0
+      for (k in 1:repeats){
+        c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = i/10,
+                                       cmi_cutoff = j/10,
+                                       prevalence = p/3))
+        x <- c %>%
+          select(-outcome_int)
+        y <- c %>%
+          select(outcome_int)
+  
+        # train/test split
+        train <- sample(1:nrow(x), nrow(x)/2)
+        x.train <- x[train,]
+        y.train <- y[train,]
+  
+        test <- (-train)
+        x.test <- x[test,]
+        y.test <- y[test,]
+  
+        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
+        y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+  
+        # update auc and mse
+        cur_auc = cur_auc + auc(y.test, y.pred)
+        cur_mse = cur_mse + mean(fit$residuals^2)
+  
+        test_data <- as.data.frame(cbind(y.test, y.pred))
+        calibration_fit <- lm(y.test ~ y.pred, data = test_data)
+  
+        # cur_calibration = cur_calibration + ifelse(calibration_fit$coefficients[2] < 0,
+        #                                            0, calibration_fit$coefficients[2])
+        cur_calibration = cur_calibration + calibration_fit$coefficients[2]
+      }
+  
+      auc_table[i,j] <- cur_auc/repeats
+      mse_table[i,j] <- cur_mse/repeats
+      calibration_table[i,j] <- cur_calibration/repeats
+      # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
     }
-
-    auc_table[i,j] <- cur_auc/repeats
-    mse_table[i,j] <- cur_mse/repeats
-    dev_table[i,j] <- cur_dev/repeats
-    calibration_table[i,j] <- cur_calibration/repeats
-    # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
   }
+  aucgrid_list[[p]] <- auc_table
+  msegrid_list[[p]] <- mse_table
+  calibrationgrid_list[[p]] <- calibration_table
 }
 
-auc_plot <- levelplot(auc_table ~ X*Y, data=data_auc,
-                      main="AUC",
-                      xlab="b_int", ylab="cmi",
-                      col.regions = heat.colors(1000))
-auc_plot
+auc_heatmap <- list()
+for (p in 1:3){
+  auc_heatmap[[p]] <- levelplot(aucgrid_list[[p]] ~ X*Y, data=data_auc,
+                        main="AUC",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+auc_heatmap
 
-mse_plot <- levelplot(mse_table ~ X*Y, data=data_mse,
-                      main="Mean Squared Error",
-                      xlab="b_int", ylab="cmi",
-                      col.regions = heat.colors(1000))
-mse_plot
+mse_heatmap <- list()
+for (p in 1:3){
+  mse_heatmap[[p]] <- levelplot(msegrid_list[[p]] ~ X*Y, data=data_mse,
+                        main="Mean Squared Error",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+mse_heatmap
 
-dev_plot <- levelplot(dev_table ~ X*Y, data=data_mse,
-                      main="Deviance",
-                      xlab="b_int", ylab="cmi",
-                      col.regions = heat.colors(1000))
-dev_plot
-
-calibration_plot <- levelplot(calibration_table ~ X*Y, data=data_calibration,
-                              main="Calibration curve slope",
-                              xlab="b_int", ylab="cmi",
-                              col.regions = cm.colors(1000))
-calibration_plot
+calibration_heatmap <- list()
+for (p in 1:3){
+  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]]  ~ X*Y, data=data_calibration,
+                                main="Calibration curve slope",
+                                xlab="b_int", ylab="cmi",
+                                col.regions = cm.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+calibration_heatmap
 ```
 **Is this the correct way to find calibration slope?**
 Some calibration curve slope have negative slope (see below). The way I find calibration slope is 
@@ -569,8 +603,9 @@ slope = calibration fit\$coefficients[2]
 ```{r}
 c <- as.data.frame(gen_outcome_f2(risk_t1,
                                      n,
-                                     b_intervention = 0.2,
-                                     cmi_cutoff = 0.4))
+                                     b_intervention = 0.1,
+                                     cmi_cutoff = 0.1,
+                                  prevalence = 0.5))
 x <- c %>%
   select(-outcome_int)
 y <- c %>%
@@ -609,7 +644,12 @@ ggplot(data = test_data,aes(x = y.pred, y = y.test)) +
 ## Research question
 From the exploratory analysis, we found that as the impact (either effectiveness or coverage) of intervention treatment increase, the predictive power of our glm model has decreased.
 
+
 What to do next - with the goal being improving predictive power
 * explore other classification model other than glm, such as random forest or boosting
 * As treatment become stronger, there end up to be fewer positive samples. Maybe we can try upweighing positive samples as we increase the power of treatment
-* decomposition total effect into direct and indirect effects
+* decompose total effect into direct and indirect effects
+* https://cran.r-project.org/web/packages/foreach/vignettes/foreach.html optimize time complexity
+
+
+## foreach library to optimize time complexity
