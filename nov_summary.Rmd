@@ -19,6 +19,7 @@ library(tidyverse)
 library(magrittr)
 library(ggplot2)
 library(prodlim)
+library(foreach)
 library(pROC)
 library(predtools)
 library(boot)
@@ -28,9 +29,9 @@ library("lattice")
 ```{r}
 set.seed(1)
 n <- 1000
-repeats <- 20 # for simulation
+repeats <- 100 # for simulation
 cmi_cutoff <- 0.2
-b_intervention <- 0.1
+b_intervention <- 0.8
 ```
 
 ## Background & Motivation
@@ -39,14 +40,16 @@ Electronic health records (EHRs) data are widely used for clinical research. The
 
 After implementing a CPM, medical professionals will use these models to inform clinical decision-making and allocation of interventions. Ideally, the intervention will prevent the outcome that the CPM is predicting. This leads to an important challenge: how do we evaluate CPMs in the presence of interventions? If the CPM is accurate, and the intervention is effective, those who are truly at risk of the adverse outcome will not actually have the event. To evaluate the CPM appropriately, we are interested in what the causal inference refers to as the counter-factual: the outcome that would have occurred without the intervention being deployed. Unfortunately we do not observe this counter-factual.
 
-Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professional’s judgement). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and strategies we can use to mitigate these challenges. We will do this by first proposing a causal model. Next using simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
+Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professional’s judgement). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and strategies we can use to address these challenges. We first propose possible causal models. Next, we use simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
 
 ## Exploratory analysis
-During the initial stage of investigation, we proposed 2 possible causal models.
-The basic components in the causal models are initial risk, intervention(1=intervention, 0=no intervention), and observed
-outcome (1=sick, 0=healthy). A patient with initial risk higher than the intervention cutoff ($CMI$) will receive intervention treatment. The effectiveness of treatment is decided by $b_{intervention}$. In general, a higher $b_{intervention}$ means lower effectiveness. What differentiates the 2 models is the mechanism to generate the final observed outcome with intervention. The first model decides a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and received intervention treatment. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider  risk after intervention. Instead, depending on the intervention effectiveness factor $b_{intervention}$, (1-$b_{intervention}$) % of the population will be assigned to have no outcome (healthy), which means their intervention is successful. 
 
-In real world, only the initial risk and observed outcome are known. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. The metric values (AUC, MSE, deviance, calibration curve slope) are averaged over 20 simulations. 
+During the initial stage of investigation, we proposed 2 possible causal models.
+
+The basic variables in the causal models are initial risk, intervention (1 = intervention, 0 = no intervention), prevalence of disease, and observed
+outcome (1 = sick, 0 = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff ($CMI$) will receive intervention treatment. The effectiveness of treatment is decided by $b_{intervention}$. In general, a higher $b_{intervention}$ means lower effectiveness. We simulate three levels of disease prevalence: high (~50% population have the illness without intervention), moderate (~30% population have the illness without intervention), and low (~18% population have the illness without intervention). A highly prevalent disease includes oral disease, according to a November 2022 WHO brief. A moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes kidney disease. What differentiates the 2 models is the mechanism to generate the final observed outcome with intervention. The first model decides a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and received intervention treatment. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider  risk after intervention. Instead, depending on the intervention effectiveness factor $b_{intervention}$, (1-$b_{intervention}$) % of the population will be assigned to have no outcome (healthy), which means their intervention is successful. 
+
+In real world, only the initial risk and observed outcome are known. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. The metric values (AUC, MSE, deviance, calibration curve slope) are averaged over 100 simulations. 
 
 ## Causal diagram 1
 ![Causal diagram 1](diagrams/f1.png)
@@ -63,10 +66,9 @@ gen_outcome1 <- function(risk_t1, n = n, prevalence){
   df <- as.data.frame(cbind(risk_t1, outcome_noint))
   return (df)
 }
-a <- gen_outcome1(risk_t1, n, prevalence=1)
-mean(a$outcome_noint)
-ideal_auc <- auc(a$outcome_noint, a$risk_t1)
-ideal_auc
+# a <- gen_outcome1(risk_t1, n, prevalence=1/3)
+# mean(a$outcome_noint)
+# ideal_auc <- auc(a$outcome_noint, a$risk_t1)
 ```
 
 
@@ -111,23 +113,26 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence
 }
 ```
 
-### vary b_intervention
+### Vary b_intervention (effectiveness of treatment)
 ```{r}
 # vary b_intervention
 AUC_list <- list()
 MSE_list <- list()
-for (p in 1:3){
+ideal_auc <- c(NA,3)
+foreach(p=1:3) %do% {
   AUC.grid <- rep(NA, 10)
   MSE.grid <- rep(NA, 10)
   for (i in 1:10) {
     AUC_i <- 0
     MSE_i <- 0
     for (j in 1:repeats){
+    #for (j in 1:repeats){
       c <- as.data.frame(gen_outcome_f1(risk_t1,
                                      n,
                                      b_intervention = i/10,
                                      cmi_cutoff,
                                      prevalence = p/3))
+      ideal_auc[p] <- auc(c$outcome_noint, c$risk_t1)
       x <- c %>%
         select(-outcome_int)
       y <- c %>%
@@ -155,10 +160,11 @@ for (p in 1:3){
 
 prev <- c("low", "mid", "high")
 
+par(mfrow = c(2, 3))
 for (p in 1:3){
   plot(AUC_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-  abline(h = ideal_auc, col = "red")
+  abline(h = ideal_auc[p], col = "red")
 }
 
 for (p in 1:3){
@@ -168,19 +174,18 @@ for (p in 1:3){
 ```
 
 
-The red line denotes the prediction accuracy when fitting the observed outcome on the initial risk. As the intervention effectiveness decreases, prediction accuracy increases. A strong treatment would make a poor prediction on a patient's final outcome. When the intervention effectiveness is the strongest, the AUC is around 0.5, meaning it's no better than flipping a coin. 
+The red line denotes the prediction accuracy when fitting the observed outcome on the initial risk. As the intervention effectiveness decreases, prediction accuracy increases. A strong treatment would make a poor prediction on a patient's final outcome. As a disease becomes less prevalent, the overall prediction accuracy decreases, but the treatment effect has less effect on prediction accuracy. For a highly prevalent disease, when the intervention effectiveness is the strongest, the AUC is around 0.5, meaning it's no better than flipping a coin. 
 
-The mean squared error (MSE) is $mean(fit\$residuals^2)$ (taking the difference between fitted and actual response values) where $fit$ is a glm function. It decreases as prediction accuracy increases.
-
-However, the deviance $mean(fit\$deviance)$increases as prediction accuracy increases. **Since we are fitting a logistic regression, deviance is the better evaluation metrics?** 
+The mean squared error (MSE) is calculated as $mean(fit\$residuals^2)$ (taking the difference between fitted and actual response values) where $fit$ is a glm function. It decreases as prediction accuracy increases.
 
 
-### vary cmi_cutoff
+### Vary cmi_cutoff (criteria of giving out treatment)
 ```{r}
 # vary cmi_cutoff
 auc_list <- list()
 mse_list <- list()
-for (p in 1:3){
+ideal_auc <- c(NA,3)
+foreach(p=1:3) %do% {
   cmi.grid <- rep(NA, 10)
   mse.grid <- rep(NA, 10)
   for (i in 1:10) {
@@ -192,6 +197,7 @@ for (p in 1:3){
                                      b_intervention,
                                      cmi_cutoff = i/10,
                                      prevalence = p/3))
+      ideal_auc[p] <- auc(c$outcome_noint, c$risk_t1)
       x <- c %>%
         select(-outcome_int)
       y <- c %>%
@@ -220,23 +226,25 @@ for (p in 1:3){
   mse_list[[p]] <- mse.grid
 }
 
+
+par(mfrow = c(2, 3))
 for (p in 1:3){
-  plot(auc_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  plot(auc_list[[p]], xlab = "cmi_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("b_intervention = ", b_intervention, "; prevalence = ", prev[p]))
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-  abline(h = ideal_auc, col = "red")
+  abline(h = ideal_auc[p], col = "red")
 }
 
 for (p in 1:3){
-  plot(mse_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(0, 40),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  plot(mse_list[[p]], xlab = "cmi_cutoff", xaxt = "n", ylab = "MSE", ylim = c(0, 40),type = "b", sub = paste0("b_intervention = ", b_intervention, "; prevalence = ", prev[p]))
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
 }
 ```
 
-MSE and deviance show a similar trend when we vary the CMI_cutoff. Notice that the higher the cutoff, less people are getting the intervention.
+MSE show a similar trend when we vary the cmi_cutoff. Notice that the higher the cutoff, less people are getting the intervention. 
 
-Varying CMI_cutoff shows a different trend from varying intervention effectiveness.To see a broader picture, we want to see how CMI_cutoff and intervention effectiveness interact to affect the metrics. 
+Varying CMI_cutoff shows a different trend of prediction accuracy from varying intervention effectiveness. To see a broader picture, we want to see how CMI_cutoff and intervention effectiveness interact to affect the metrics. 
 
-### varying b_int and cmi_cutoff
+### Varying b_int and cmi_cutoff
 
 ```{r}
 cmi <- seq(0.1, 1, length.out=10)
@@ -246,7 +254,7 @@ aucgrid_list <- list()
 msegrid_list <- list()
 calibrationgrid_list <- list()
 
-for (p in 1:3){
+foreach(p=1:3) %do% {
   data_auc <- expand.grid(X=cmi, Y=b_int)
   data_mse <- expand.grid(X=cmi, Y=b_int)
   data_calibration <- expand.grid(X=cmi, Y=b_int)
@@ -254,6 +262,7 @@ for (p in 1:3){
   auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  
   
   for (i in 1:10){
     for (j in 1:10){
@@ -314,35 +323,36 @@ for (p in 1:3){
                         col.regions = heat.colors(1000),
                         sub = paste0(" prevalence = ", prev[p]))
 }
-auc_heatmap
+cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
 
 mse_heatmap <- list()
 for (p in 1:3){
   mse_heatmap[[p]] <- levelplot(msegrid_list[[p]] ~ X*Y, data=data_mse,
                         main="Mean Squared Error",
                         xlab="b_int", ylab="cmi",
-                        col.regions = heat.colors(1000),
-                        sub = paste0(" prevalence = ", prev[p]))
+                        col.regions = rev(heat.colors(1000)),
+                        at=seq(0, 30, by = 1),
+                        sub = paste0(" prevalence = ", prev[p]),
+                        pretty = TRUE)
 }
-mse_heatmap
+cowplot::plot_grid(plotlist = mse_heatmap, ncol = 2)
 
 calibration_heatmap <- list()
 for (p in 1:3){
-  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]]  ~ X*Y, data=data_calibration,
-                                main="Calibration curve slope",
-                                xlab="b_int", ylab="cmi",
-                                col.regions = cm.colors(1000),
-                        sub = paste0(" prevalence = ", prev[p]))
+  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]] ~ X*Y, data=data_calibration,
+                                        main="Calibration curve slope",
+                                        xlab="b_int", ylab="cmi",
+                                        col.regions = cm.colors(1000),
+                                        at=seq(-2, 4, length.out=1000),
+                                        sub = paste0(" prevalence = ", prev[p]))
 }
-calibration_heatmap
+cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
 
-Moving from left to right, intervention effectiveness decreases, and AUC increases.
-Moving from bottom to top, if close to half of population receives treatment, the prediction performance is the worst. However, if almost everyone or no one receives treatment, we see better performance.
+Moving from bottom to top, if close to half of population receives treatment, the prediction performance is the worst. However, if almost everyone or no one receives treatment, we see better performance. Moving from left to right, as intervention effectiveness decreases, AUC increases.
+This trend is more clear in moderate and high prevalent scenario.
 
-MSE shows that as intervention effectiveness decreases or as less people receives treatment, there is less error in prediction.
-
-Deviance plot doesn't have a clear trend, but in general when less people receives treatment, deviance is higher.
+MSE shows that as intervention effectiveness decreases or as less people receives treatment, there is less error in prediction. MSE is overall higher for lower-prevalence diseases.
 
 
 ## Causal diagram 2
@@ -382,7 +392,8 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff,prevalence
 # vary b_intervention
 AUC_list <- list()
 MSE_list <- list()
-for (p in 1:3){
+ideal_auc <- c(NA,3)
+foreach(p=1:3) %do% {
   AUC.grid <- rep(NA, 9)
   MSE.grid <- rep(NA, 9)
   for (i in 1:9) {
@@ -394,6 +405,7 @@ for (p in 1:3){
                                      b_intervention = i/10,
                                      cmi_cutoff,
                                      prevalence = p/3))
+      ideal_auc[p] <- auc(c$outcome_noint, c$risk_t1)
       x <- c %>%
         select(-outcome_int)
       y <- c %>%
@@ -421,10 +433,11 @@ for (p in 1:3){
 
 prev <- c("low", "mid", "high")
 
+par(mfrow = c(2, 3))
 for (p in 1:3){
   plot(AUC_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-  abline(h = ideal_auc, col = "red")
+  abline(h = ideal_auc[p], col = "red")
 }
 
 for (p in 1:3){
@@ -432,16 +445,18 @@ for (p in 1:3){
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
 }
 ```
-In the second causal model, the AUC as intervention almost change nothing, is close to the ideal AUC. Therefore, this generating mechanism might be better.
 
-MSE shows same trend, deviance doesn't really have a trend.
+MSE and AUC shows similar trend as the first causal diagram. However, in the second causal model, the case when intervention almost has no effect has an AUC very close to the AUC under the direct relationship between health outcome and initial risk. 
+
+
 
 ### vary cmi_cutoff
 ```{r}
 # vary cmi_cutoff
 auc_list <- list()
 mse_list <- list()
-for (p in 1:3){
+ideal_auc <- c(NA,3)
+foreach(p=1:3) %do% {
   cmi.grid <- rep(NA, 9)
   mse.grid <- rep(NA, 9)
   for (i in 1:9) {
@@ -453,6 +468,7 @@ for (p in 1:3){
                                      b_intervention,
                                      cmi_cutoff = i/10,
                                      prevalence = p/3))
+      ideal_auc[p] <- auc(c$outcome_noint, c$risk_t1)
       x <- c %>%
         select(-outcome_int)
       y <- c %>%
@@ -481,22 +497,22 @@ for (p in 1:3){
   mse_list[[p]] <- mse.grid
 }
 
+par(mfrow = c(2, 3))
 for (p in 1:3){
-  plot(auc_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  plot(auc_list[[p]], xlab = "cmi_cutoff", xaxt = "n", ylab = "AUC", ylim = c(0.45, 1),type = "b", sub = paste0(" b_intervention = ", b_intervention, "; prevalence = ", prev[p]))
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
-  abline(h = ideal_auc, col = "red")
+  abline(h = ideal_auc[p], col = "red")
 }
 
 for (p in 1:3){
-  plot(mse_list[[p]], xlab = "b_intervention", xaxt = "n", ylab = "MSE", ylim = c(0, 80),type = "b", sub = paste0("cmi_cutoff = ", cmi_cutoff, "; prevalence = ", prev[p]))
+  plot(mse_list[[p]], xlab = "cmi_cutoff", xaxt = "n", ylab = "MSE", ylim = c(0, 100),type = "b", sub = paste0("b_intervention = ", b_intervention, "; prevalence = ", prev[p]))
   axis(side=1, at=1:10, labels = seq(0.1, 1, 0.1))
 }
 ```
 
-Compared to the previous mechanism, the AUC trend makes more sense: as less people
-receives treatment, the prediction performance is closer to the direct relationship between fitting outcome on risk_t1.
+The effect of cmi_cutoff on prediction accuracy is relatively consistent across different values as shown in both AUC and MSE plots. In general, high prevalence of disease leads to higher prediction accuracy no matter what value cmi_cutoff takes. Prediction accuracy large depends on the disease prevalence and effectiveness of treatment.
 
-### vary both b_intervention and cmi_cutoff
+### Vary both b_intervention and cmi_cutoff
 ```{r}
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
@@ -505,7 +521,7 @@ aucgrid_list <- list()
 msegrid_list <- list()
 calibrationgrid_list <- list()
 
-for (p in 1:3){
+foreach(p=1:3) %do% {
   data_auc <- expand.grid(X=cmi, Y=b_int)
   data_mse <- expand.grid(X=cmi, Y=b_int)
   data_calibration <- expand.grid(X=cmi, Y=b_int)
@@ -573,28 +589,35 @@ for (p in 1:3){
                         col.regions = heat.colors(1000),
                         sub = paste0(" prevalence = ", prev[p]))
 }
-auc_heatmap
+cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
 
 mse_heatmap <- list()
 for (p in 1:3){
   mse_heatmap[[p]] <- levelplot(msegrid_list[[p]] ~ X*Y, data=data_mse,
                         main="Mean Squared Error",
                         xlab="b_int", ylab="cmi",
-                        col.regions = heat.colors(1000),
-                        sub = paste0(" prevalence = ", prev[p]))
+                        col.regions = rev(heat.colors(1000)),
+                        at=seq(0, 30, by = 1),
+                        sub = paste0(" prevalence = ", prev[p]),
+                        pretty = TRUE)
 }
-mse_heatmap
+cowplot::plot_grid(plotlist = mse_heatmap, ncol = 2)
 
 calibration_heatmap <- list()
 for (p in 1:3){
-  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]]  ~ X*Y, data=data_calibration,
-                                main="Calibration curve slope",
-                                xlab="b_int", ylab="cmi",
-                                col.regions = cm.colors(1000),
-                        sub = paste0(" prevalence = ", prev[p]))
+  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]] ~ X*Y, data=data_calibration,
+                                        main="Calibration curve slope",
+                                        xlab="b_int", ylab="cmi",
+                                        col.regions = cm.colors(1000),
+                                        at=seq(-2, 4, length.out=1000),
+                                        sub = paste0(" prevalence = ", prev[p]))
 }
-calibration_heatmap
+cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
+
+
+Trends are similar to the first causal model.
+
 **Is this the correct way to find calibration slope?**
 Some calibration curve slope have negative slope (see below). The way I find calibration slope is 
 calibration fit = lm(y.test ~ y.pred, data = data_test)
@@ -641,8 +664,9 @@ ggplot(data = test_data,aes(x = y.pred, y = y.test)) +
   geom_abline(intercept = 0, slope = 1, color = "red")
 ```
 
+
 ## Research question
-From the exploratory analysis, we found that as the impact (either effectiveness or coverage) of intervention treatment increase, the predictive power of our glm model has decreased.
+From the exploratory analysis, we found that as the effectiveness of intervention treatment increase or the prevalence of disease decrease, the predictive performance of our glm model has decreased and MSE has increased. When less people receives treatment, there is less error in prediction. These discoveries circle back to our research question — evaluating CPMs in the presence of intervention. CPM prefers (produce better predictive performance and lower error) high-prevalence disease, poor treatment, and small coverage of intervention.
 
 
 What to do next - with the goal being improving predictive power
