@@ -24,6 +24,7 @@ library(foreach)
 library(pROC)
 library(predtools)
 library(boot)
+library(glmnet)
 library(kableExtra)
 library("lattice")
 ```
@@ -73,13 +74,13 @@ gen_outcome1 <- function(risk_t1, n = n, prevalence){
   df <- as.data.frame(cbind(risk_t1, outcome_noint))
   return (df)
 }
-# a <- gen_outcome1(risk_t1, n, prevalence=-2.5)
-# mean(a$outcome_noint)
-# ideal_auc <- auc(a$outcome_noint, a$risk_t1)
+a <- gen_outcome1(risk_t1, n, prevalence=-6)
+mean(a$outcome_noint)
+(ideal_auc <- auc(a$outcome_noint, a$risk_t1))
 # prevalence = -6.5: 2%
 # prevalence = -4: 25~30%
 # prevalence = -2.5: 50%
-prevalence <- c(-6.5, -4, -2.5)
+prevalence <- c(-6, -4, -2.5)
 prev <- c("low", "mid", "high") 
 ```
 
@@ -158,7 +159,8 @@ foreach(p=1:3) %do% {
       x.test <- x[test,]
       y.test <- y[test,]
   
-      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial)
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial,
+                  maxit = 100)
       fit_sum <- summary(fit)
       y.pred <- predict(fit, as.data.frame(x.test))
       cmi_i = cmi_i + auc(y.test, y.pred)
@@ -192,12 +194,15 @@ when very few or the majority of the population receives treatment, the predicti
 
 ### Vary b_intervention (effectiveness of treatment)
 ```{r}
+# old_dir <- getwd()
+# sink(file = 'sink.txt', split = TRUE)
+
 # vary b_intervention
 AUC_list <- list()
 MSE_list <- list()
 ideal_auc <- c(NA,3)
 
-foreach(p=1:3) %do% {
+for (p in 1:3) {
   AUC.grid <- rep(NA, 10)
   MSE.grid <- rep(NA, 10)
   for (i in 1:10) {
@@ -222,18 +227,22 @@ foreach(p=1:3) %do% {
       test <- (-train)
       x.test <- x[test,]
       y.test <- y[test,]
-      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial)
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial,  maxit = 100)
       y.pred <- predict(fit, as.data.frame(x.test))
+      # fit <- cv.glmnet(cbind(0, x.train$risk_t1), y.train, alpha = 1, family = "binomial", lambda = NULL)
+      # y.pred <- predict(fit, cbind(0, x.test$risk_t1), s = fit$lambda.min) # linear combination of
       AUC_i = AUC_i + auc(y.test, y.pred)
       MSE_i = MSE_i + mean((y.pred - y.test)^2)
     }
     # AUC
     AUC.grid[i] <- AUC_i/repeats
     MSE.grid[i] <- MSE_i/repeats
+    # print(AUC.grid)
   }
   AUC_list[[p]] <- AUC.grid
   MSE_list[[p]] <- MSE.grid
 }
+# sink(NULL)
 
 par(mfrow = c(2, 3))
 for (p in 1:3){
@@ -256,6 +265,9 @@ As a disease becomes less prevalent, the overall prediction accuracy and MSE dep
 
 ### Varying b_int and cmi_cutoff
 ```{r}
+# old_dir <- getwd()
+# sink(file = 'sink.txt', split = TRUE)
+
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
 
@@ -263,7 +275,8 @@ aucgrid_list <- list()
 msegrid_list <- list()
 calibrationgrid_list <- list()
 
-foreach(p=1:3) %do% {
+counter <- 0
+for (p in 1:3) {
   data_auc <- expand.grid(X=cmi, Y=b_int)
   data_mse <- expand.grid(X=cmi, Y=b_int)
   data_calibration <- expand.grid(X=cmi, Y=b_int)
@@ -272,13 +285,14 @@ foreach(p=1:3) %do% {
   mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   
-  
   for (i in 1:10){
     for (j in 1:10){
       cur_auc <- 0
       cur_mse <- 0
       cur_calibration <- 0
       for (k in 1:repeats){
+        counter <- counter + 1
+        # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f1(risk_t1,
                                        n,
                                        b_intervention = i/10,
@@ -298,8 +312,13 @@ foreach(p=1:3) %do% {
         x.test <- x[test,]
         y.test <- y[test,]
   
-        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial)
-        y.pred <- predict(fit, as.data.frame(x.test)) # linear combination of independent variable
+        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
+        y.pred <- predict(fit, as.data.frame(x.test))
+        
+        # perfect separation occurred and AUC couldn't be calculated
+        # fit <- glmnet(cbind(0, x.train$risk_t1), y.train, alpha = 1, family = "binomial", lambda = NULL)
+        # y.pred <- predict(fit, cbind(0, x.test$risk_t1)) # linear combination of independent variable
+        
         calibration_fit <- glm(y.test ~ y.pred, family = binomial, data = as.data.frame(x.test))
         
         cur_auc = cur_auc + auc(y.test, y.pred)
@@ -310,13 +329,14 @@ foreach(p=1:3) %do% {
       auc_table[i,j] <- cur_auc/repeats
       mse_table[i,j] <- cur_mse/repeats
       calibration_table[i,j] <- cur_calibration/repeats
-      # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
     }
   }
   aucgrid_list[[p]] <- auc_table
   msegrid_list[[p]] <- mse_table
   calibrationgrid_list[[p]] <- calibration_table
 }
+# sink(NULL)
+
 
 auc_heatmap <- list()
 for (p in 1:3){
@@ -454,7 +474,7 @@ foreach(p=1:3) %do% {
       x.test <- x[test,]
       y.test <- y[test,]
   
-      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial)
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial,  maxit = 100)
       y.pred <- predict(fit, as.data.frame(x.test))
       cmi_i = cmi_i + auc(y.test, y.pred)
       mse_i = mse_i + mean((y.pred - y.test)^2)
@@ -522,7 +542,7 @@ for (p in 1:3) {
       
       x.test <- x[test,]
       y.test <- y[test,]
-      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial)
+      fit <- glm(y.train ~ risk_t1, data = as.data.frame(x.train), family = binomial,  maxit = 100)
       # fit_sum <- summary(fit)
       y.pred <- predict(fit, as.data.frame(x.test))
       AUC_i = AUC_i + auc(y.test, y.pred)
@@ -552,6 +572,9 @@ for (p in 1:3){
 
 ### Vary both b_intervention and cmi_cutoff
 ```{r}
+old_dir <- getwd()
+sink(file = 'sink2.txt', split = TRUE)
+
 cmi <- seq(0.1, 0.9, length.out=9)
 b_int <- seq(0.1, 0.9, length.out=9)
 
@@ -559,6 +582,7 @@ aucgrid_list <- list()
 msegrid_list <- list()
 calibrationgrid_list <- list()
 
+counter <- 0
 foreach(p=1:3) %do% {
   data_auc <- expand.grid(X=cmi, Y=b_int)
   data_mse <- expand.grid(X=cmi, Y=b_int)
@@ -574,6 +598,8 @@ foreach(p=1:3) %do% {
       cur_mse <- 0
       cur_calibration <- 0
       for (k in 1:repeats){
+        counter <- counter + 1
+        if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f1(risk_t1,
                                        n,
                                        b_intervention = i/10,
@@ -593,7 +619,7 @@ foreach(p=1:3) %do% {
         x.test <- x[test,]
         y.test <- y[test,]
   
-        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial)
+        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial, maxit = 100)
         y.pred <- predict(fit, as.data.frame(x.test))
   
         # update auc and mse
@@ -615,6 +641,7 @@ foreach(p=1:3) %do% {
   msegrid_list[[p]] <- mse_table
   calibrationgrid_list[[p]] <- calibration_table
 }
+sink(NULL)
 
 auc_heatmap <- list()
 for (p in 1:3){
