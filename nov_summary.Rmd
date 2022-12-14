@@ -42,7 +42,7 @@ Current research on EHR data has investigated several sources of biases such as 
 During the initial stage of investigation, we proposed 2 possible causal models.
 
 The basic variables in the causal models are initial risk, intervention (1 = intervention, 0 = no intervention), prevalence of disease, and observed
-outcome (1 = sick, 0 = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff ($CMI$) will receive intervention treatment. The effectiveness of treatment is decided by $b_{intervention}$. In general, a higher $b_{intervention}$ means lower effectiveness. We simulate three levels of disease prevalence rate: high (~50% population have the illness without intervention), moderate (~25% population have the illness without intervention), and low (~4% population have the illness without intervention). A highly prevalent disease includes hypertension, a moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes []. What differentiates the 2 models is the mechanism to generate the final observed outcome with intervention. The first model calculates a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and also received intervention treatment. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider risk after intervention. Instead, depending on the intervention effectiveness factor $b_{intervention}$, (1-$b_{intervention}$) % of the population will be assigned to have no outcome (healthy), which means their intervention is successful. 
+outcome (1 = sick, 0 = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff ($CMI$) will receive intervention treatment. The effectiveness of treatment is decided by $b_{intervention}$. In general, a higher $b_{intervention}$ means lower effectiveness. We simulate three levels of disease prevalence rate: high (~50% population have the illness without intervention), moderate (~25% population have the illness without intervention), and low (~6% population have the illness without intervention). A highly prevalent disease includes hypertension, a moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes []. What differentiates the 2 models is the mechanism to generate the final observed outcome with intervention. The first model calculates a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and also received intervention treatment. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider risk after intervention. Instead, depending on the intervention effectiveness factor $b_{intervention}$, (1-$b_{intervention}$) % of the population will be assigned to have no outcome (healthy), which means their intervention is successful. 
 
 In the real world, only the initial risk and observed outcome are known to us. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. The metrics (AUC, MSE, calibration curve slope) to evaluate CPM are averaged over 100 simulations. 
 
@@ -52,7 +52,7 @@ In the real world, only the initial risk and observed outcome are known to us. W
 ```{r}
 set.seed(1)
 n <- 1000
-repeats <- 30 # for simulation
+repeats <- 100 # for simulation
 cmi_cutoff <- 0.1
 b_intervention <- 0.8
 
@@ -125,6 +125,15 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence
   return (df_final)
 }
 ```
+
+```{r}
+c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                     n,
+                                     b_intervention = 0.2,
+                                     cmi_cutoff,
+                                     prevalence = prevalence[1]))
+```
+
 
 ### Vary cmi_cutoff (criteria of giving out treatment)
 ```{r}
@@ -265,8 +274,8 @@ As a disease becomes less prevalent, the overall prediction accuracy and MSE dep
 
 ### Varying b_int and cmi_cutoff
 ```{r}
-# old_dir <- getwd()
-# sink(file = 'sink.txt', split = TRUE)
+old_dir <- getwd()
+sink(file = 'sink.txt', split = TRUE)
 
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
@@ -335,7 +344,7 @@ for (p in 1:3) {
   msegrid_list[[p]] <- mse_table
   calibrationgrid_list[[p]] <- calibration_table
 }
-# sink(NULL)
+sink(NULL)
 
 
 auc_heatmap <- list()
@@ -372,11 +381,24 @@ for (p in 1:3){
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
 
+```{r}
+par(mfrow = c(3,1))
+hist(calibrationgrid_list[[1]], xlim = c(-1,4), breaks = seq(-1,3,0.2))
+axis(side=1, at=seq(-1,3,0.2), labels=seq(-1,3,0.2))
+hist(calibrationgrid_list[[2]], xlim = c(-1,4), breaks = seq(-1,3,0.2))
+axis(side=1, at=seq(-1,3,0.2), labels=seq(-1,3,0.2))
+hist(calibrationgrid_list[[3]], xlim = c(-1,4), breaks = seq(-1,4,0.2))
+axis(side=1, at=seq(-1,3,0.2), labels=seq(-1,3,0.2))
+```
+
+
 Moving from bottom to top, if close to half of population receives treatment, the prediction performance is the worst. However, if almost everyone or no one receives treatment, we see better performance. Moving from left to right, as intervention effectiveness decreases, AUC increases and MSE decreases. However, these trends are only clear in mid to high prevalent diseases. As prevalence rate increase, MSE decreases overall.
 
-Calibration curves evaluate how calibrated a classifier is. From the slope of the curve, we can see whether there is any trend of overestimation or underestimation. The goal is to plot the actual outcome of test data against the linear predictor $\beta_0 + \beta_1 * y.pred$. $y.pred$ is the outcome predicted from test data using logistic regression model trained on $risk_t1$ using the training data. If a model is well calibrated, the slope $\beta_1$ = 1. $\beta_1$ > 1 means underestimation, and $\beta_1$ > 1 means overestimation. 
+For low prevalence disease, even when treatment is generally effective, few outcomes are changed with intervention. Therefore, as prevalence increases, the prediction power depends more on the internvention effectiveness. 
 
-For low to mid prevalent diseases, there is an overall overestimation. For high prevalent disease, there are signs of overestimating the probability of outcome when a treatment is more effective; however, when treatment is less effective, the model becomes better calibrated.
+Calibration curves evaluate how calibrated a classifier is. From the slope of the curve, we can see whether there is any trend of overestimation or underestimation. The goal is to plot the actual outcome of test data against the linear predictor $\beta_0 + \beta_1 * y.pred$. $y.pred$ is the outcome predicted from test data using logistic regression model trained on $risk_t1$ using the training data. If a model is well calibrated, the slope $\beta_1$ = 1. $\beta_1$ < 1 means overestimation, and $\beta_1$ > 1 means underestimation. 
+
+For low to mid prevalent diseases, there are more underestimation. For high prevalent disease, there are signs of overestimating the probability of outcome when a treatment is more effective; however, when treatment is less effective, the model becomes better calibrated.
 
 
 ## Causal diagram 2
