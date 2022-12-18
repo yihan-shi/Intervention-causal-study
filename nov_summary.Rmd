@@ -702,7 +702,7 @@ for (p in 1:3){
                                         main="Calibration curve slope",
                                         xlab="b_int", ylab="cmi",
                                         col.regions = cm.colors(1000),
-                                        at=seq(-0.5, 2.5, length.out=1000),
+                                        at=seq(0.6, 1.4, length.out=1000),
                                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
