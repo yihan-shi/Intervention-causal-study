@@ -52,7 +52,7 @@ In the real world, only the initial risk and observed outcome are known to healt
 set.seed(1)
 n <- 1000
 repeats <- 10 # for simulation
-cmi_cutoff <- 0.7
+cmi_cutoff <- 0.5
 b_intervention <- 0.2
 
 # generate risk_t1
@@ -330,13 +330,7 @@ for (p in 1:3) {
         new_repeats = new_repeats - 1
       }
       
-      # test dataframe
-      c1 <- c %>% 
-        filter(risk_t1 >= 0.5 & outcome_int == 1)
-      c2 <- c %>% 
-        filter(risk_t1 < 0.5 & outcome_int == 1)
-      
-      print(paste0("i: ", i, "j: ", j, "p: ", p, "diff: ", abs(dim(c1)[1] - dim(c2)[1])))
+      # print(paste0("i: ", i, "j: ", j, "p: ", p, "diff: ", abs(dim(c1)[1] - dim(c2)[1])))
     }
     # AUC
     AUC.grid[i] <- AUC_i/new_repeats
@@ -402,7 +396,6 @@ for (p in 1:3) {
   data_mse <- expand.grid(X=cmi, Y=b_int)
   data_brier <- expand.grid(X=cmi, Y=b_int)
   data_calibration <- expand.grid(X=cmi, Y=b_int)
-  new_repeats <- repeats
   
   auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   mse_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
@@ -410,11 +403,15 @@ for (p in 1:3) {
   calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   
   for (i in 1:10){
+    
     for (j in 1:10){
+      
       cur_auc <- 0
       cur_mse <- 0
       cur_brier <- 0
       cur_calibration <- 0
+      
+      count <- 0
       for (k in 1:repeats){
         # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f1(risk_t1,
@@ -422,47 +419,36 @@ for (p in 1:3) {
                                        b_intervention = i/10,
                                        cmi_cutoff = j/10,
                                        prevalence = prevalence[p]))
-        x <- c %>%
-          select(-outcome_int)
-        y <- c %>%
-          select(outcome_int)
-  
-        # train/test split
-        train <- sample(1:nrow(x), nrow(x)/2)
-        x.train <- x[train,]
-        y.train <- y[train,]
-  
-        test <- (-train)
-        x.test <- x[test,]
-        y.test <- y[test,]
+        t <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = i/10,
+                                       cmi_cutoff = j/10,
+                                       prevalence = prevalence[p]))
         
-        if (!mean(y.test) == 0) { 
-          fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
-          y.pred <- predict(fit, as.data.frame(x.test), type = "response")
-          # fit_all <- glm(c$outcome_int ~ risk_t1, data = c, family = binomial)
+        if (!mean(c$outcome_int) == 0) { 
+          count = count + 1
+          fit <- glm(outcome_int ~ risk_t1, data = c, family = binomial,  maxit = 100)
+          y.pred <- predict(fit, as.data.frame(t), type = "response")
+          y.pred_prob <- predict(fit, as.data.frame(t))
+          calibration_fit <- glm(t$outcome_int ~ y.pred_prob, family = binomial, data = as.data.frame(t))
           
-          calibration_fit <- glm(y.test ~ y.pred, family = binomial, data =
-                                   as.data.frame(x.test))
-          
-          cur_auc = cur_auc + auc(y.test, y.pred)
-          cur_mse = cur_mse + mean((y.pred - y.test)^2)
+          cur_auc = cur_auc + auc(c$outcome_int, y.pred)
+          cur_mse = cur_mse + mean((y.pred - c$outcome_int)^2)
           cur_brier = cur_mse + brier(fit, scaled = TRUE) # scaled brier
           cur_calibration = cur_calibration + calibration_fit$coefficients[2]
         }
-        
-        else { # skip those with only 1 level of outcome
-          new_repeats = new_repeats - 1
-        }
       }
-  
-      auc_table[i,j] <- cur_auc/new_repeats
-      mse_table[i,j] <- cur_mse/new_repeats
-      brier_table[i,j] <- cur_brier/new_repeats
-      calibration_table[i,j] <- cur_calibration/new_repeats
-      print(paste0("new repeats:", new_repeats))
+
+    auc_table[i,j] <- cur_auc/count
+    mse_table[i,j] <- cur_mse/count
+    brier_table[i,j] <- cur_brier/count
+    calibration_table[i,j] <- cur_calibration/count
+    # print(paste0("new repeats:", new_repeats))
       
     }
+
   }
+  
   aucgrid_list[[p]] <- auc_table
   msegrid_list[[p]] <- mse_table
   briergrid_list[[p]] <- brier_table
@@ -472,7 +458,7 @@ for (p in 1:3) {
 
 # remove outliers
 for (p in 1:3){
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]]  > 2 | calibrationgrid_list[[p]]  < 0.6] <- mean(calibrationgrid_list[[p]])
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]]  > 3 | calibrationgrid_list[[p]]  < 0.5] <- mean(calibrationgrid_list[[p]])
 }
 
 # plot
@@ -491,8 +477,8 @@ for (p in 1:3){
   brier_heatmap[[p]] <- levelplot(briergrid_list[[p]] ~ X*Y, data=data_brier,
                         main="Scaled Brier Score",
                         xlab="b_int", ylab="cmi",
-                        col.regions = heat.colors(1000),
-                        at=seq(0, 0.5, by = 0.01),
+                        col.regions = rev(heat.colors(1000)),
+                        at=seq(0, 0.25, by = 0.01),
                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = brier_heatmap, ncol = 2)
@@ -503,7 +489,7 @@ for (p in 1:3){
                         main="Mean Squared Error",
                         xlab="b_int", ylab="cmi",
                         col.regions = rev(heat.colors(1000)),
-                        at=seq(0, 0.4, by = 0.01),
+                        at=seq(0, 0.25, by = 0.01),
                         sub = paste0(" prevalence = ", prev[p]),
                         pretty = TRUE)
 }
@@ -520,6 +506,12 @@ for (p in 1:3){
 }
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
+
+```{r}
+plot(t$outcome_int ~ y.pred)
+abline(glm(t$outcome_int ~ y.pred, family = binomial, data = as.data.frame(t)))
+```
+
 
 ```{r}
 # par(mfrow = c(3,1))
