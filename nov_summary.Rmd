@@ -17,7 +17,6 @@ library(kableExtra)
 library(tidyverse)
 library(dplyr)
 library(piercer)
-library(tidyverse)
 library(magrittr)
 library(ggplot2)
 library(prodlim)
@@ -50,8 +49,8 @@ In the real world, only the initial risk and observed outcome are known to healt
 
 ```{r}
 set.seed(1)
-n <- 1000
-repeats <- 10 # for simulation
+n <- 10000
+repeats <- 20 # for simulation
 cmi_cutoff <- 0.7
 b_intervention <- 0.2
 
@@ -148,12 +147,18 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence
 # }
 # (mse/100)
 
+set.seed(10)
 model_sum <- expand.grid(prev = prevalence, 
                          b_int = c(0.1, 0.9),
                          cmi = c(0.1, 0.5, 0.9),
                          mean_squared_error = NA)
+row <- 1
 for (row in 1:dim(model_sum)[1]){
+  # mse <- rep(NA, 100)
   mse <- 0
+  mse_true <- 0
+  auc <- 0
+  auc_true <- 0
   
   for (i in 1:100){
       c <- as.data.frame(gen_outcome_f1(risk_t1,
@@ -161,16 +166,27 @@ for (row in 1:dim(model_sum)[1]){
                                          b_intervention = model_sum$b_int[row],
                                          cmi_cutoff = model_sum$cmi[row],
                                          prevalence = model_sum$prev[row]))
-      fit <- glm(outcome_int ~ risk_t1, data = c, family = binomial,  maxit = 100)
+      fit <- glm(outcome_int ~ risk_t1, data = c, family = binomial)
       y.pred <- predict(fit, as.data.frame(c), type = "response")
+      # mse[i] <- mean((c$outcome_int - y.pred)^2)
       mse = mse + mean((c$outcome_int - y.pred)^2)
+      mse_true = mse_true + mean((c$outcome_noint - y.pred)^2)
+      auc = auc + auc(c$outcome_int, y.pred)
+      auc_true = auc_true + auc(c$outcome_noint, y.pred)
   }
   model_sum$mean_squared_error[row] <- mse/100
+  model_sum$mean_squared_error_true[row] <- mse_true/100
+  model_sum$auc[row] <- auc/100
+  model_sum$auc_true[row] <- auc_true/100
+  print(paste0("row", row))
 }
 
 model_sum <- model_sum %>% 
   arrange(prev)
 model_sum
+
+# add the true mse and auc
+
 
 # (mse/100)
 
