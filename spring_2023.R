@@ -8,7 +8,7 @@ library(epitools)
 
 # generate data -----------------------------------------------------------
 set.seed(1)
-n <- 20000
+n <- 30000
 repeats <- 20 # for simulation
 cmi_cutoff <- 0.7
 b_intervention <- 0.2
@@ -78,7 +78,7 @@ df <- as.data.frame(gen_outcome_f1(risk_t1,
                                   prevalence = -4))
 
 x <- df %>%
-  select(-outcome_int)
+  select(-c(outcome_int, risk_t2, outcome_noint))
 y <- df %>%
   select(outcome_int)
 
@@ -99,17 +99,78 @@ y.test <- y[test,]
 # Use log(p) = intercept + \beta_{i} * X_i + \beta_{r} * X_r to estimate \beta_{i}, which is the
 # effective of intervention. New risk = Initial risk * \beta_{i}
 
-fit_lb <- logbin(y.train ~ risk_t1, data = as.data.frame(x.train), method = "em") # method determines which algorithm to use to find the MLE
-car::S(fit_lb)
+set.seed(10)
+model_sum_lb <- expand.grid(prev = prevalence,
+                         # b_int = seq(0.1, 0.9, 0.1),
+                         # cmi = seq(0.1, 0.9, 0.1)
+                         b_int = c(0.1, 0.5, 0.9),
+                         cmi = c(0.1, 0.5, 0.9))
+row <- 1
+for (row in 1:dim(model_sum_lb)[1]){
+  # print(paste0("row", row))
+  # sink()
+  auc <- 0
+  auc_uncorrected <- 0
 
-y.pred_resp_lb <- predict(fit_lb, as.data.frame(x.test), type = "response")
-auc(y.test, y.pred_resp)
+  for (i in 1:repeats){
+    # load data
+    df <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = model_sum_lb$b_int[row],
+                                       cmi_cutoff = model_sum_lb$cmi[row],
+                                       prevalence = model_sum_lb$prev[row]))
 
-# known: risk_t1, CMI
-fit_lb2 <- logbin(y.train ~ risk_t1 + cmi, data = as.data.frame(x.train), method = "em", maxit = 50000) # method determines which algorithm to use to find the MLE
-car::S(fit_lb2)
-y.pred_resp_lb <- predict(fit_lb2, as.data.frame(x.test), type = "response")
-auc(y.test, y.pred_resp_lb)
+    x <- df %>%
+      select(-c(outcome_int, risk_t2, outcome_noint))
+    y <- df %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- 1:round(0.8 * nrow(x))
+    x.train <- x[train,]
+    y.train <- y[train,]
+    test <- (round(0.8 * nrow(x)) + 1):nrow(x)
+    x.test <- x[test,]
+    y.test <- y[test,]
+    y.pred <- predict(fit, as.data.frame(df), type = "response")
+
+    # original auc
+    fit <- logbin(y.train ~ risk_t1, data = x.train,
+                  method = "em",
+                  maxit = 20000)
+    x.test_1 <- x.test %>%
+      select(risk_t1)
+    y.pred_resp <- predict.glm(fit, x.test_1, type = "response")
+    auc_uncorrected = auc_uncorrected + auc(y.test, y.pred_resp)
+
+    # fit model with new information: CMI
+    fit_lb <- logbin(y.train ~ risk_t1 + as.factor(cmi), data = as.data.frame(x.train),
+                     method = "em") # method determines which algorithm to use to find the MLE
+    summ <- car::S(fit_lb)
+
+    # for the patients with observation, use \beta_{i} to adjust their risk
+    x.train_2 <- x.train %>%
+      mutate(new_risk = ifelse(cmi == 1, risk_t1 * summ$exponentiated[3],
+                               risk_t1))
+    x.test_2 <- x.test %>%
+      mutate(new_risk = ifelse(cmi == 1, risk_t1 * summ$exponentiated[3],
+                               risk_t1))
+
+    # use new_risk to fit model
+    fit_lb2 <- logbin(y.train ~ new_risk, data = x.train_2,
+                      method = "em")
+    x.test_2 <- x.test_2 %>%
+      select(new_risk)
+    y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
+    auc = auc + auc(y.test, y.pred_resp_2)
+  }
+  model_sum_lb$auc[row] <- auc/repeats
+  model_sum_lb$auc_uncorrected[row] <- auc_uncorrected/repeats
+}
+
+model_sum_lb <- model_sum_lb %>%
+  arrange(prev) %>%
+  mutate(auc_diff = auc - auc_uncorrected)
 
 
 # Correction 2:  ---------------------------------------------------------------
@@ -119,16 +180,15 @@ auc(y.test, y.pred_resp_lb)
 
 set.seed(10)
 model_sum <- expand.grid(prev = prevalence,
-                         b_int = c(0.1, 0.5, 0.9),
-                         cmi = c(0.1, 0.5, 0.9),
-                         mean_squared_error = NA)
+                         b_int = seq(0.1, 0.9, 0.1),
+                         cmi = seq(0.1, 0.9, 0.1))
 row <- 1
 for (row in 1:dim(model_sum)[1]){
   # mse <- rep(NA, 100)
   auc <- 0
   auc_uncorrected <- 0
 
-  for (i in 1:100){
+  for (i in 1:repeats){
     df <- as.data.frame(gen_outcome_f1(risk_t1,
                                       n,
                                       b_intervention = model_sum$b_int[row],
@@ -150,14 +210,16 @@ for (row in 1:dim(model_sum)[1]){
     auc_uncorrected = auc_uncorrected + auc(df$outcome_int, y.pred)
   }
 
-  model_sum$auc[row] <- auc/100
-  model_sum$auc_uncorrected[row] <- auc_uncorrected/100
+  model_sum$auc[row] <- auc/repeats
+  model_sum$auc_uncorrected[row] <- auc_uncorrected/repeats
   print(paste0("row", row))
 }
 
 model_sum <- model_sum %>%
   arrange(prev) %>%
   mutate(auc_diff = auc - auc_uncorrected)
+
+# write.csv(model_sum, "corrected_auc.csv")
 
 # ---------------------------------------------------------------------------
 have_cmi <-subset(df, cmi == 1)
@@ -207,10 +269,44 @@ car::S(fit_nocmi)
 # auc(y.test, y.pred_resp)
 
 
-# # Intervention type 2: Probabilistic approach
+# Intervention type 2: Probabilistic approach
+
 
 # resource ----------------------------------------------------------------
 # https://www.statulator.com/blog/conducting-stratified-analyses/
 # https://bookdown.org/rwnahhas/RMPH/blr-log-binomial.html
 # https://sphweb.bumc.bu.edu/otlt/mph-modules/bs/bs704_multivariable/bs704_multivariable3.html#:~:text=The%20Cochran%2DMantel%2DHaenszel%20method%20is%20a%20technique%20that%20generates,and%20a%20dichotomous%20risk%20factor.
 
+# notes
+# original fit
+fit <- logbin(y.train ~ risk_t1, data = x.train,
+              method = "em",
+              maxit = 20000)
+(summ_original <- car::S(fit))
+x.test_1 <- x.test %>%
+  select(risk_t1)
+y.pred_resp <- predict.glm(fit, x.test_1, type = "response")
+auc_uncorrected <- auc(y.test, y.pred_resp)
+
+# fit model with new information: CMI
+fit_lb <- logbin(y.train ~ risk_t1 + cmi, data = as.data.frame(x.train),
+                 method = "em") # method determines which algorithm to use to find the MLE
+(summ <- car::S(fit_lb))
+summ$exponentiated[3] # \beta_{i}
+
+# for the patients with observation, use \beta_{i} to adjust their risk
+x.train_2 <- x.train %>%
+  mutate(new_risk = ifelse(cmi == 1, risk_t1 * summ$exponentiated[3],
+                           risk_t1))
+x.test_2 <- x.test %>%
+  mutate(new_risk = ifelse(cmi == 1, risk_t1 * summ$exponentiated[3],
+                           risk_t1))
+
+# use new_risk to fit model
+fit_lb2 <- logbin(y.train ~ new_risk, data = x.train_2,
+                  method = "em")
+(summ2 <- car::S(fit_lb2))
+x.test_2 <- x.test_2 %>%
+  select(new_risk)
+y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
+auc(y.test, y.pred_resp_2)
