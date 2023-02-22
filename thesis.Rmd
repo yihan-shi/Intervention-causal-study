@@ -1,0 +1,975 @@
+---
+title: "Investigate the impact of Confounding Medical Interventions (CMI) in electronic health records (EHR) data"
+author: "Yihan Shi, Dr. Benjamin Goldstein"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+fig_width: 10
+fig_height: 8
+---
+
+\vspace{-0.5 cm}
+
+```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.align = 'center', fig.pos = "H", out.extra = '',
+                      out.width = "60%")
+```
+
+## 1. Introduction
+
+Electronic health records (EHRs) data are widely used for clinical research. The abundance of available data, the low cost of obtaining those observational data, and its real-time nature have given EHR enormous potential to develop powerful predictive models. Researchers rely on EHR data extensively to predict the risk of clinical outcomes. As clinical prediction models (CPMs) find their way into clinical practice, it is important to develop systems and procedures to monitor their safety and effectiveness. The Food and Drug Administration (FDA) has developed draft guidance for how such tools should be considered. Within Duke University Health System, a governance framework has been developed for evaluating and monitoring the performance of CPMs to ensure their adequate performance. 
+
+After implementing a CPM, medical professionals will use these models to inform clinical decision-making and allocation of interventions. Ideally, the intervention will prevent the outcome that the CPM is predicting. This leads to an important challenge: how do we evaluate CPMs in the presence of interventions? If the CPM is accurate, and the intervention is effective, those who are truly at risk of the adverse outcome will not actually have the event. To evaluate the CPM appropriately, we are interested in what the causal inference refers to as the counterfactual: the outcome that would have occurred without the intervention being deployed. Unfortunately, we do not observe this counterfactual.
+
+Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professionals’ judgment). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and the strategies we can use to address these challenges. We first propose possible causal models. Next, we use simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
+
+## 2. Challenges of using confounded EHR data in simulation
+
+During the initial stage of investigation, we proposed two possible causal models to illustrate and pinpoint the research problem. The variables included in the causal models are initial risk, intervention (`1` = intervention, `0` = no intervention), prevalence of disease, and the observed outcome (`1` = sick, `0` = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff (`CMI`) will receive intervention treatment. The effectiveness of treatment is decided by $\beta_{intervention}$. In general, a higher $\beta_{intervention}$ means lower effectiveness. We simulate three levels of disease prevalence rate: high (~50% population have the illness without intervention), moderate (~25% population have the illness without intervention), and low (~6% population have the illness without intervention). A highly prevalent disease includes hypertension, a moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes Chronic obstructive pulmonary disease. 
+
+The two causal models differ in their mechanisms to generate the final observed outcome with intervention. The first model calculates a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and also received intervention treatment. Depending on the treatment strength, the patient who would have been sick might end up become healthy. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider risk after intervention. Instead, depending on the intervention effectiveness factor $\beta_{intervention}$, we set (1-$\beta_{intervention}$) % of the population to be assigned to have no outcome (healthy) deterministically, which means their intervention is successful. 
+
+In the real world, only the initial risk and observed outcome are known to health professionals. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. We choose to evaluate the models using area under the curve (AUC) based on fitted linear predictors and actual outcomes as well as calibration slope. These metrics are averaged over 100 simulations, with each simulation of 20000 observations. 
+
+### 2.1 Causal diagram 1
+![Causal diagram 1](diagrams/f1.png)
+
+- Observed outcome (without intervention) is determined by a binomial distribution as following:
+
+$$x = prevalence + 5 \times risk_{t1}$$ where the AUC is controlled at around 0.8
+$$p = exp(x)/(1+exp(x))$$
+$$outcome = binomial(n,p)$$
+- CMI/Intervention is present when a patient has $risk_{t1}$ higher than a set `cmi_cutoff`.
+
+- $risk_{t2} = risk_{t1} \times \beta_{intervention}$ if a patient had an outcome and received treatment. Otherwise $risk_{t2}$ remains the same as $risk_{t1}$.
+
+- For patients who had an outcome and received treatment, their observed outcome (with intervention) is re-generated. Say there are m patients like this, then $outcome = binomial(m, risk_{t2})$, while the outcomes of the rest remain to be their outcomes without intervention.
+
+```{r}
+set.seed(1)
+n <- 20000
+repeats <- 100 # for simulation
+cmi_cutoff <- 0.7
+b_intervention <- 0.2
+
+# generate risk_t1
+risk_t1 <- runif(n, 0, 1)
+
+prevalence <- c(-6, -4, -2.5)
+prev <- c("low", "mid", "high") 
+```
+
+```{r}
+gen_outcome1 <- function(risk_t1, n = n, prevalence){
+  xb <- prevalence + 5 * risk_t1
+  p <- exp(xb)/(1 + exp(xb))
+  outcome_noint <- rbinom(n, 1, p)
+  df <- as.data.frame(cbind(risk_t1, outcome_noint))
+  return (df)
+}
+```
+
+```{r}
+gen_cmi <- function(risk_t1, n = n, cmi_cutoff, prevalence){
+  df <- gen_outcome1(risk_t1, n, prevalence)
+  df <- df %>%
+    mutate(cmi = ifelse(risk_t1 > cmi_cutoff, 1, 0)) # the higher the cutoff, the less people getting intervention
+
+  return (df)
+}
+
+gen_risk_t2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff, prevalence){
+  # if cmi == 1 & outcome_noint == 1, then risk_t2 = risk_t1 * b_intervention
+  df <- gen_cmi(risk_t1, n, cmi_cutoff, prevalence)
+  df <- df %>%
+    mutate(risk_t2 = ifelse((outcome_noint == 1 & cmi == 1),
+                            risk_t1 * b_intervention,
+                            risk_t1))
+  return (df)
+}
+  
+gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence){
+  df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff, prevalence)
+  condition <- df %>%
+    filter(outcome_noint == 1 & cmi == 1)
+
+  # 1. generate all observed outcome probabilistically
+  # oo: if outcome_no_intervention = 0 & intervention = 0 --> old outcome
+  # ol: if outcome_no_intervention = 0 & intervention = 1 --> old outcome
+  # lo: if outcome_no_intervention = 1 & intervention = 0 --> old outcome
+  # ll: if outcome_no_intervention = 1 & intervention = 1 --> rbinom(n, 1, risks_t2)
+
+  num_obs <- dim(condition)[1]
+
+  xb <- prevalence + 5 * df$risk_t2
+  p <- exp(xb)/(1 + exp(xb))
+  
+  df_final <- df %>%
+    mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
+                                 # rbinom(num_obs, 1, df$risk_t2),
+                                rbinom(num_obs, 1, p),
+                                outcome_noint))
+
+  return (df_final)
+}
+```
+
+#### Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
+
+```{r}
+old_dir <- getwd()
+sink(file = 'sink.txt', split = TRUE)
+
+cmi <- seq(0.1, 1, length.out=10)
+b_int <- seq(0.1, 1, length.out=10)
+
+aucgrid_list <- list()
+calibrationgrid_list <- list()
+counter <- 0
+
+for (p in 1:3) {
+  data_auc <- expand.grid(X=cmi, Y=b_int)
+  data_calibration <- expand.grid(X=cmi, Y=b_int)
+  new_repeats <- repeats
+  
+  auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  
+  for (i in 1:10){
+    for (j in 1:10){
+      cur_auc <- 0
+      cur_calibration <- 0
+      for (k in 1:repeats){
+        if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
+        c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = i/10,
+                                       cmi_cutoff = j/10,
+                                       prevalence = prevalence[p]))
+        x <- c %>%
+          select(-outcome_int)
+        y <- c %>%
+          select(outcome_int)
+  
+        # train/test split
+        train <- sample(1:nrow(x), nrow(x)/2)
+        x.train <- x[train,]
+        y.train <- y[train,]
+  
+        test <- (-train)
+        x.test <- x[test,]
+        y.test <- y[test,]
+        
+        if (!mean(y.test) == 0) { 
+          fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
+          y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+          # fit_all <- glm(c$outcome_int ~ risk_t1, data = c, family = binomial)
+          
+          calibration_fit <- glm(y.test ~ y.pred, family = binomial, data =
+                                   as.data.frame(x.test))
+          
+          cur_auc = cur_auc + auc(y.test, y.pred)
+          cur_calibration = cur_calibration + calibration_fit$coefficients[2]
+        }
+        
+        else { # skip those with only 1 level of outcome
+          new_repeats = new_repeats - 1
+        }
+        counter <- counter + 1
+      }
+  
+      auc_table[i,j] <- cur_auc/new_repeats
+      calibration_table[i,j] <- cur_calibration/new_repeats
+      print(paste0("new repeats:", new_repeats))
+      
+    }
+  }
+  aucgrid_list[[p]] <- auc_table
+  calibrationgrid_list[[p]] <- calibration_table
+}
+sink(NULL)
+
+# remove outliers
+for (p in 1:3){
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]]  > 2 | calibrationgrid_list[[p]]  < 0.6] <- mean(calibrationgrid_list[[p]])
+}
+
+# plot
+auc_heatmap <- list()
+for (p in 1:3){
+  auc_heatmap[[p]] <- levelplot(aucgrid_list[[p]] ~ X*Y, data=data_auc,
+                        main="AUC",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
+
+brier_heatmap <- list()
+for (p in 1:3){
+  brier_heatmap[[p]] <- levelplot(briergrid_list[[p]] ~ X*Y, data=data_brier,
+                        main="Scaled Brier Score",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        at=seq(0, 0.5, by = 0.01),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+cowplot::plot_grid(plotlist = brier_heatmap, ncol = 2)
+
+mse_heatmap <- list()
+for (p in 1:3){
+  mse_heatmap[[p]] <- levelplot(msegrid_list[[p]] ~ X*Y, data=data_mse,
+                        main="Mean Squared Error",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = rev(heat.colors(1000)),
+                        at=seq(0, 0.4, by = 0.01),
+                        sub = paste0(" prevalence = ", prev[p]),
+                        pretty = TRUE)
+}
+cowplot::plot_grid(plotlist = mse_heatmap, ncol = 2)
+
+calibration_heatmap <- list()
+for (p in 1:3){
+  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]] ~ X*Y, data=data_calibration,
+                                        main="Calibration curve slope",
+                                        xlab="b_int", ylab="cmi",
+                                        col.regions = cm.colors(1000),
+                                        at=seq(0.6, 1.4, length.out=1000),
+                                        sub = paste0(" prevalence = ", prev[p]))
+}
+cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
+```
+
+#### Influential variables on model performance
+
+```{r}
+# df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
+# df  
+# names <- c("b_intervention", "cmi_cutoff", "prevalence", "AUC")
+# colnames(df) <- names
+
+b_int <- seq(0.1,1,0.1)
+cmi <- seq(0.1,1,0.1)
+prev <- prevalence
+var <- list(b_intervention = b_int, cmi_cutoff = cmi, prevalence = prev)
+df <- expand.grid(var)
+df$auc <- unlist(aucgrid_list)
+df$brier <-  unlist(msegrid_list)
+
+# fit logistic regression
+fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence,
+           data = df)
+summary(fit1)
+# 
+# sum_table <-  data.frame(
+#   Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
+#   Estimate  = c(fit1$coefficients[2], fit1$coefficients[3], fit1$coefficients[4]),
+#   Std.error = c(0.010802, 0.010802, 0.002164),
+#   t_value   = c(3.322, 6.493, -14.161),
+#   p_value = c(0.001, "<0.001", "<0.001")
+# )
+# 
+# kable(
+#   sum_table,
+#   col.names = c(colnames(sum_table)),
+#   digits = 2,
+#   caption = "Relationship between AUC and predictors"
+# )
+```
+
+## 2.2 Causal diagram 2
+![Causal diagram 2](diagrams/f2.png)
+
+```{r}
+gen_outcome_f2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff, prevalence){
+    df <- gen_risk_t2(risk_t1, n, b_intervention, cmi_cutoff,prevalence)
+  condition <- df %>%
+    filter(outcome_noint == 1 & cmi == 1)
+
+  # 2. choose (1-b_intervention) % of the ppl (outcome_no_intervention = 1 & intervention = 1) to have
+  # outcome = 0
+
+  # i.e. b_intervention = 0.1 (very effective treatment), then 90% change their 1 to 0
+  effective <- sample_frac(condition, size = 1-b_intervention, replace = FALSE)
+  effective_df <- subset(df,(risk_t1 %in% effective$risk_t1 &
+                               outcome_noint %in% effective$outcome_noint &
+                               cmi %in% effective$cmi &
+                               risk_t2 %in% effective$risk_t2))
+
+  non_effective_df <- subset(df,!(risk_t1 %in% effective$risk_t1 &
+                                    outcome_noint %in% effective$outcome_noint &
+                                    cmi %in% effective$cmi &
+                                    risk_t2 %in% effective$risk_t2))
+  effective_df$outcome_int <- 0
+  non_effective_df$outcome_int <- non_effective_df$outcome_noint
+  df_final <- rbind(effective_df, non_effective_df)
+
+  return (df_final)
+}
+
+# a <- gen_outcome_f2(risk_t1, n = n, b_intervention = 9/10, cmi_cutoff = 0.3, prevalence = prevalence[2])
+```
+
+#### Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
+
+```{r results="hide"}
+# old_dir <- getwd()
+# sink(file = 'sink2.txt', split = TRUE)
+
+cmi <- seq(0.1, 0.9, length.out=9)
+b_int <- seq(0.1, 0.9, length.out=9)
+
+aucgrid_list <- list()
+calibrationgrid_list <- list()
+
+# counter <- 0
+foreach(p=1:3) %do% {
+  data_auc <- expand.grid(X=cmi, Y=b_int)
+  data_calibration <- expand.grid(X=cmi, Y=b_int)
+  
+  auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
+  
+  for (i in 1:9){
+    for (j in 1:9){
+      cur_auc <- 0
+      cur_calibration <- 0
+      for (k in 1:repeats){
+        # counter <- counter + 1
+        # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
+        c <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = i/10,
+                                       cmi_cutoff = j/10,
+                                       prevalence = prevalence[p]))
+        x <- c %>%
+          select(-outcome_int)
+        y <- c %>%
+          select(outcome_int)
+  
+        # train/test split
+        train <- sample(1:nrow(x), nrow(x)/2)
+        x.train <- x[train,]
+        y.train <- y[train,]
+  
+        test <- (-train)
+        x.test <- x[test,]
+        y.test <- y[test,]
+  
+        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial, maxit = 100)
+        y.pred <- predict(fit, as.data.frame(x.test))
+  
+        # update auc and mse
+        cur_auc <- cur_auc + auc(y.test, y.pred)
+  
+        calibration_fit <- glm(y.test ~ y.pred, family = "binomial", data = as.data.frame(x.test))
+  
+        cur_calibration <- cur_calibration + calibration_fit$coefficients[2]
+      }
+  
+      auc_table[i,j] <- cur_auc/repeats
+      calibration_table[i,j] <- cur_calibration/repeats
+      # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
+    }
+  }
+  aucgrid_list[[p]] <- auc_table
+  calibrationgrid_list[[p]] <- calibration_table
+}
+# sink(NULL)
+
+# remove outliers
+for (p in 1:3){
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]]  > 2 | calibrationgrid_list[[p]]  < 0.6] <- mean(calibrationgrid_list[[p]])
+}
+
+# plot
+
+auc_heatmap <- list()
+for (p in 1:3){
+  auc_heatmap[[p]] <- levelplot(aucgrid_list[[p]] ~ X*Y, data=data_auc,
+                        main="AUC",
+                        xlab="b_int", ylab="cmi",
+                        col.regions = heat.colors(1000),
+                        sub = paste0(" prevalence = ", prev[p]))
+}
+cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
+
+cowplot::plot_grid(plotlist = mse_heatmap, ncol = 2)
+
+calibration_heatmap <- list()
+for (p in 1:3){
+  calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]] ~ X*Y, data=data_calibration,
+                                        main="Calibration curve slope",
+                                        xlab="b_int", ylab="cmi",
+                                        col.regions = cm.colors(1000),
+                                        at=seq(0.6, 1.4, length.out=1000),
+                                        sub = paste0(" prevalence = ", prev[p]))
+}
+cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
+```
+
+#### Important variables
+
+```{r}
+# df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
+# df  
+# names <- c("b_intervention", "cmi_cutoff", "prevalence", "AUC")
+# colnames(df) <- names
+
+b_int <- seq(0.1,0.9,0.1)
+cmi <- seq(0.1,0.9,0.1)
+prev <- prevalence
+var <- list(b_intervention = b_int, cmi_cutoff = cmi, prevalence = prev)
+df <- expand.grid(var)
+df$auc <- unlist(aucgrid_list)
+df$brier <-  unlist(msegrid_list)
+
+# fit logistic regression
+fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence,
+           data = df)
+fit2 <- lm(brier ~ cmi_cutoff^2 + b_intervention + prevalence,
+           data = df)
+summary(fit1)
+
+# sum_table <-  data.frame(
+#   Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
+#   Estimate  = c(0.035880, 0.070138, -0.030645),
+#   Std.error = c(0.010802, 0.010802, 0.002164),
+#   t_value   = c(3.322, 6.493, -14.161),
+#   p_value = c(0.001, "<0.001", "<0.001")
+# )
+# 
+# kable(
+#   sum_table,
+#   col.names = c(colnames(sum_table)),
+#   digits = 2,
+#   caption = "Relationship between AUC and predictors"
+# )
+
+```
+
+We have illustrated the research question by simulating health risks as well as intervention percentage and effectiveness. We identified the scenarios where prediction models are prone to low prediction power, high error rate, and poor calibration. In general, rarer diseases have a high error rate and overall underestimation of health outcome and also presents an AUC trend different from higher prevalent diseases. In terms of the 3 evaluation metrics, the prediction model performs the best when a disease is highly prevalent (50%) and treatment is almost not effective at all. However, this is not an ideal scenario in the real world. 
+
+## 3. Developing predticive models with knowledge of confounding
+
+```{r}
+n <- 40000
+repeats <- 50 # for simulation
+```
+
+We explored methods that mitigate the problems mentioned in the above sections. 
+
+### 3.1 Resource-constrained intervention
+#### 3.1.1 Adjusted posterior risk approach
+
+```{r}
+# prev = -4: don't work when cmi > 0.8
+# prev = -2.5: don't work when b_int > 0.6 and when cmi > 0.5
+
+model_sum_lb <- expand.grid(prev = prevalence,
+                         b_int = seq(0.1, 0.9, 0.1),
+                         cmi = seq(0.1, 0.9, 0.1),
+                         auc = NA,
+                         auc_uncorrected = NA)
+                         # b_int = c(0.1, 0.5, 0.9),
+                         # cmi = c(0.1, 0.5, 0.9))
+
+set.seed(10)
+for (row in 1:dim(model_sum_lb)[1]){
+# for (row in 111:111) {
+  print(paste0("row", row))
+  auc <- 0
+  auc_uncorrected <- 0
+
+  for (i in 1:repeats){
+  # for (i in 1:6){
+    # load data
+    df <- as.data.frame(gen_outcome_f1(risk_t1,
+                                       n,
+                                       b_intervention = model_sum_lb$b_int[row],
+                                       cmi_cutoff = model_sum_lb$cmi[row],
+                                       prevalence = model_sum_lb$prev[row]))
+
+    x <- df %>%
+      select(-c(outcome_int, risk_t2, outcome_noint))
+    y <- df %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- 1:round(0.8 * nrow(x))
+    x.train <- x[train,]
+    y.train <- y[train,]
+    test <- (round(0.8 * nrow(x)) + 1):nrow(x)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    # original auc
+    # ERROR HANDLING
+    fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
+
+    possibleError <- tryCatch(
+      glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "log"), start = coef(fit)),
+      error=function(e) e
+      )
+
+    if(inherits(possibleError, "error")) {
+      auc = 0
+      print("supply starting value error")
+      break
+    }
+    fit_again <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "log"), start = coef(fit))
+
+    # tapply(x.train$risk_t1, y.train, summary)
+    # summary(fit)
+
+    x.test_1 <- x.test %>%
+      select(risk_t1)
+    y.pred_resp <- predict.glm(fit_again, x.test_1, type = "response")
+    auc_uncorrected = auc_uncorrected + auc(y.test, y.pred_resp)
+
+    # fit model with new information: CMI
+    # ERROR HANDLING
+    fit_lb <- glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = binomial(link = "logit"))
+    possibleError <- tryCatch(
+      glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = binomial(link = "log"), start = coef(fit_lb)),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      print("log-binomial model has invalid starting values")
+      auc = 0
+      break
+    }
+    fit_lb_again <- glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = binomial(link = "log"), start = coef(fit_lb))
+
+    # deterministically can't compare cmi at fixed level of risk_t1, problematic method bc need to supply start value
+
+    # for the patients with observation, use exp(\beta_{i}) to adjust their risk
+    x.train_2 <- x.train %>%
+      mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb_again)[3]),
+                               risk_t1))
+    x.test_2 <- x.test %>%
+      mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb_again)[3]),
+                               risk_t1))
+
+    # ERROR HANDLING
+    fit_lb2 <- glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "logit"))
+    possibleError <- tryCatch(
+      glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "log"), start = coef(fit_lb2)),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      print("log-binomial model has invalid starting values")
+      auc = 0
+      break
+    }
+    fit_lb2_again <- glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "log"), start = coef(fit_lb2))
+
+
+    # use new_risk to fit model
+    x.test_2 <- x.test_2 %>%
+      select(new_risk)
+    y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
+    auc = auc + auc(y.test, y.pred_resp_2)
+  }
+  model_sum_lb$auc[row] <- auc/repeats
+  model_sum_lb$auc_uncorrected[row] <- auc_uncorrected/repeats
+}
+```
+
+
+#### 3.1.2 Stratified approach
+
+```{r}
+# all results present
+set.seed(10)
+model_sum <- expand.grid(prev = prevalence,
+                            b_int = seq(0.1, 0.9, 0.1),
+                            cmi = seq(0.1, 0.9, 0.1),
+                            auc = NA,
+                            auc_uncorrected = NA)
+
+# row <- 1
+for (row in 1:dim(model_sum)[1]){
+# for (row in 1:1){
+  print(paste0("row", row))
+  # mse <- rep(NA, 100)
+  auc <- 0
+  auc_uncorrected <- 0
+
+  for (i in 1:repeats){
+  # for (i in 20:20) {
+    df <- as.data.frame(gen_outcome_f1(risk_t1,
+                                      n,
+                                      b_intervention = model_sum$b_int[row],
+                                      cmi_cutoff = model_sum$cmi[row],
+                                      prevalence = model_sum$prev[row]))
+
+    fit <- glm(outcome_int ~ risk_t1, data = df, family = binomial)
+    y.pred <- predict(fit, as.data.frame(df), type = "response")
+
+    have_cmi <- df %>%
+      filter(cmi == 1)
+    no_cmi <- df %>%
+      filter(cmi == 0)
+
+    fit_cmi <- glm(outcome_int ~ risk_t1, data = have_cmi, family = binomial)
+    y.pred_cmi <- predict(fit_cmi, as.data.frame(have_cmi), type = "response")
+    fit_no_cmi <- glm(outcome_int ~ risk_t1, data = no_cmi, family = binomial)
+    y.pred_no_cmi <- predict(fit_no_cmi, as.data.frame(no_cmi), type = "response")
+
+    possibleError <- tryCatch(
+      auc(no_cmi$outcome_int, y.pred_no_cmi),
+      auc(have_cmi$outcome_int, y.pred_cmi),
+      auc(df$outcome_int, y.pred),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      auc = 0
+      print("No-intervention group have no outcome")
+      break
+    }
+
+    auc = auc + dim(have_cmi)[1]/dim(df)[1] * auc(have_cmi$outcome_int, y.pred_cmi) + dim(no_cmi)[1]/dim(df)[1] * auc(no_cmi$outcome_int, y.pred_no_cmi)
+    auc_uncorrected = auc_uncorrected + auc(df$outcome_int, y.pred)
+  }
+
+  model_sum$auc[row] <- auc/repeats
+  model_sum$auc_uncorrected[row] <- auc_uncorrected/repeats
+}
+```
+
+### 3.2 Point-of-care intervention
+
+```{r}
+gen_cmi_2 <- function(risk_t1, n = n, prevalence){
+  df <- gen_outcome1(risk_t1, n, prevalence)
+
+  xb <- prevalence + 5 * risk_t1
+  p <- exp(xb)/(1 + exp(xb))
+
+  df <- df %>%
+    mutate(cmi = rbinom(n, 1, p),
+           prob = p) # risk is proportional to the likelihood of cmi;adjust for auc & fraction of ppl getting intervention
+  return (df)
+}
+
+df <- gen_cmi_2(risk_t1, n, prevalence = -2.5)
+a <- df %>%
+  filter(cmi == 1)
+mean(a$prob)
+mean(a$risk)
+
+b <- df %>%
+  filter(cmi == 0)
+mean(b$risk)
+
+gen_risk_t2_2 <- function(risk_t1, n = n, b_intervention, prevalence){
+  # if cmi == 1 & outcome_noint == 1, then risk_t2 = risk_t1 * b_intervention
+  df <- gen_cmi_2(risk_t1, n, prevalence)
+  df <- df %>%
+    mutate(risk_t2 = ifelse((outcome_noint == 1 & cmi == 1),
+                            risk_t1 * b_intervention,
+                            risk_t1))
+  return (df)
+}
+
+gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,prevalence){
+  df <- gen_risk_t2_2(risk_t1, n, b_intervention, prevalence)
+  condition <- df %>%
+    filter(outcome_noint == 1 & cmi == 1)
+
+  num_obs <- dim(condition)[1]
+
+  xb <- prevalence + 5 * df$risk_t2
+  p <- exp(xb)/(1 + exp(xb))
+
+  df_final <- df %>%
+    mutate(outcome_int = ifelse((outcome_noint  == 1 & cmi == 1),
+                                rbinom(num_obs, 1, p),
+                                outcome_noint))
+
+  return (df_final)
+}
+```
+
+#### 3.2.1 Adjusted posterior risk approach
+
+```{r}
+# only prev = -6
+model_sum_lb2 <- expand.grid(prev = prevalence,
+                            b_int = seq(0.1, 0.9, 0.1),
+                            auc = NA,
+                            auc_uncorrected = NA)
+
+set.seed(10)
+for (row in 1:dim(model_sum_lb2)[1]){
+# for (row in 1:1){
+  print(paste0("row", row))
+  auc <- 0
+  auc_uncorrected <- 0
+
+  for (i in 1:repeats){
+  # for (i in 1:1){
+    # load data
+    df <- as.data.frame(gen_outcome_f2(risk_t1,
+                                       n,
+                                       b_intervention = model_sum_lb2$b_int[row],
+                                       prevalence = model_sum_lb2$prev[row]))
+
+    x <- df %>%
+      select(-c(outcome_int, risk_t2, outcome_noint))
+    y <- df %>%
+      select(outcome_int)
+
+    # train/test split
+    train <- 1:round(0.8 * nrow(x))
+    x.train <- x[train,]
+    y.train <- y[train,]
+    test <- (round(0.8 * nrow(x)) + 1):nrow(x)
+    x.test <- x[test,]
+    y.test <- y[test,]
+
+    # original auc
+    fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "logit"))
+    summary(fit)
+    # ERROR HANDLING
+    possibleError <- tryCatch(
+      glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "log"), start = coef(fit)),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      auc = 0
+      print("supply starting value error")
+      break
+    }
+    fit_again <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "log"), start = coef(fit))
+
+    x.test_1 <- x.test %>%
+      select(risk_t1)
+    y.pred_resp <- predict.glm(fit_again, x.test_1, type = "response")
+    auc_uncorrected = auc_uncorrected + auc(y.test, y.pred_resp)
+
+    # fit model with new information: CMI
+    fit_lb <- glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = binomial(link = "logit"))
+    # ERROR HANDLING
+    possibleError <- tryCatch(
+      glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = binomial(link = "log"), start = coef(fit_lb)),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      auc = 0
+      break
+    }
+    fit_lb_again <- glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = binomial(link = "log"), start = coef(fit_lb))
+
+    # deterministically can't compare cmi at fixed level of risk_t1, problematic method bc need to supply start value
+
+    # for the patients with observation, use exp(\beta_{i}) to adjust their risk
+    x.train_2 <- x.train %>%
+      mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb_again)[3]),
+                               risk_t1))
+    x.test_2 <- x.test %>%
+      mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb_again)[3]),
+                               risk_t1))
+
+
+    fit_lb2 <- glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "logit"))
+    # ERROR HANDLING
+    possibleError <- tryCatch(
+      glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "log"), start = coef(fit_lb2)),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      auc = 0
+      print("supply starting value error")
+      break
+    }
+    fit_lb2_again <- glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "log"), start = coef(fit_lb2))
+
+    # use new_risk to fit model
+    x.test_2 <- x.test_2 %>%
+      select(new_risk)
+    y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
+    auc = auc + auc(y.test, y.pred_resp_2)
+  }
+  model_sum_lb2$auc[row] <- auc/repeats
+  model_sum_lb2$auc_uncorrected[row] <- auc_uncorrected/repeats
+}
+```
+
+#### 3.2.2 Stratified approach
+
+```{r}
+# all results present
+model_sum2 <- expand.grid(prev = prevalence,
+                         b_int = seq(0.1, 0.9, 0.1),
+                         auc = NA,
+                         auc_uncorrected = NA)
+
+set.seed(10)
+for (row in 1:dim(model_sum2)[1]){
+# for (row in 243:243){
+  print(paste0("row", row))
+  auc <- 0
+  auc_uncorrected <- 0
+
+  for (i in 1:repeats){
+    df <- as.data.frame(gen_outcome_f2(risk_t1,
+                                       n,
+                                       b_intervention = model_sum2$b_int[row],
+                                       prevalence = model_sum2$prev[row]))
+
+    fit <- glm(outcome_int ~ risk_t1, data = df, family = binomial)
+    y.pred <- predict(fit, as.data.frame(df), type = "response")
+
+    have_cmi <- df %>%
+      filter(cmi == 1)
+    no_cmi <- df %>%
+      filter(cmi == 0)
+
+    fit_cmi <- glm(outcome_int ~ risk_t1, data = have_cmi, family = binomial)
+    y.pred_cmi <- predict(fit_cmi, as.data.frame(have_cmi), type = "response")
+    fit_no_cmi <- glm(outcome_int ~ risk_t1, data = no_cmi, family = binomial)
+    y.pred_no_cmi <- predict(fit_no_cmi, as.data.frame(no_cmi), type = "response")
+
+    possibleError <- tryCatch(
+      auc(no_cmi$outcome_int, y.pred_no_cmi),
+      auc(have_cmi$outcome_int, y.pred_cmi),
+      auc(df$outcome_int, y.pred),
+      error=function(e) e
+    )
+
+    if(inherits(possibleError, "error")) {
+      auc = 0
+      print("No-intervention group have no outcome")
+      break
+    }
+
+    auc = auc + dim(have_cmi)[1]/dim(df)[1] * auc(have_cmi$outcome_int, y.pred_cmi) + dim(no_cmi)[1]/dim(df)[1] * auc(no_cmi$outcome_int, y.pred_no_cmi)
+    auc_uncorrected = auc_uncorrected + auc(df$outcome_int, y.pred)
+  }
+
+  model_sum2$auc[row] <- auc/repeats
+  model_sum2$auc_uncorrected[row] <- auc_uncorrected/repeats
+}
+```
+
+```{r}
+# intervention 1
+i1 <- read.csv("model_sum_0216.csv")
+i1_lb <- read.csv("model_sum_lb_0216.csv")
+
+i1 <- i1 %>%
+  filter(auc != 0) %>%
+  select(-c(X, auc, auc_uncorrected))
+
+# sum_i1_prev <- i1 %>%
+#   group_by(prev) %>%
+#   summarize(auc_change = mean(auc_diff))
+#
+# sum_i1_int <- i1 %>%
+#   group_by(b_int) %>%
+#   summarize(auc_change = mean(auc_diff))
+
+i1_lb <- i1_lb %>%
+  filter((auc != 0) & (auc_uncorrected != 0)) %>%
+  select(-c(X, auc, auc_uncorrected))
+
+# sum_i1_lb_prev <- i1_lb %>%
+#   group_by(prev) %>%
+#   summarize(auc_change = mean(auc_diff))
+#
+# sum_i1_lb_int <- i1_lb %>%
+#   group_by(b_int) %>%
+#   summarize(auc_change = mean(auc_diff))
+
+i1_df_plot <- i1 %>%
+  inner_join(i1_lb, by = c("prev", "b_int", "cmi"), suffix = c(".weighted_auc", ".adjusted_risk")) %>%
+  pivot_longer(cols = starts_with("auc"),
+               names_to = "method",
+               values_to = "auc_change")
+i1_df_plot
+
+i1_prev_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_change)) +
+  geom_boxplot() +
+  facet_grid(.~prev) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC change")
+
+i1_prev_plot
+
+i1_int_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_change)) +
+  geom_boxplot() +
+  facet_grid(.~b_int) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC change")
+
+i1_int_plot
+
+# intervention 2
+i2 <- read.csv("model_sum2_0216.csv")
+i2_lb <- read.csv("model_sum_lb2_0216.csv")
+
+i2 <- i2 %>%
+  filter(auc != 0) %>%
+  select(-c(X, auc, auc_uncorrected))
+
+# sum_i2_prev <- i2 %>%
+#   group_by(prev) %>%
+#   summarize(auc_change = mean(auc_diff))
+#
+# sum_i2_int <- i2 %>%
+#   group_by(b_int) %>%
+#   summarize(auc_change = mean(auc_diff))
+
+i2_lb <- i2_lb %>%
+  filter((auc != 0) & (auc_uncorrected != 0)) %>%
+  select(-c(X, auc, auc_uncorrected))
+
+# sum_i1_lb_prev <- i1_lb %>%
+#   group_by(prev) %>%
+#   summarize(auc_change = mean(auc_diff))
+#
+# sum_i1_lb_int <- i1_lb %>%
+#   group_by(b_int) %>%
+#   summarize(auc_change = mean(auc_diff))
+
+i2_df_plot <- i2 %>%
+  full_join(i2_lb, by = c("prev", "b_int"), suffix = c(".weighted_auc", ".adjusted_risk")) %>%
+  pivot_longer(cols = starts_with("auc"),
+               names_to = "method",
+               values_to = "auc_change")
+i2_df_plot
+
+i2_prev_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_change)) +
+  geom_boxplot() +
+  facet_grid(.~prev) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC change")
+
+i2_prev_plot
+
+i1_int_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_change)) +
+  geom_boxplot() +
+  facet_grid(.~b_int) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC change")
+
+i1_int_plot
+```
+
+## 4. Conclusion
+
+
