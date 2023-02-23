@@ -17,35 +17,54 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       out.width = "60%")
 ```
 
+```{r}
+library(kableExtra)
+library("lattice")
+library(tidyverse)
+library(dplyr)
+library(piercer)
+library(magrittr)
+library(ggplot2)
+library(prodlim)
+library(gtsummary)
+library(foreach)
+library(pROC)
+library(predtools)
+library(boot)
+library(glmnet)
+```
+
 ## 1. Introduction
 
-Electronic health records (EHRs) data are widely used for clinical research. The abundance of available data, the low cost of obtaining those observational data, and its real-time nature have given EHR enormous potential to develop powerful predictive models. Researchers rely on EHR data extensively to predict the risk of clinical outcomes. As clinical prediction models (CPMs) find their way into clinical practice, it is important to develop systems and procedures to monitor their safety and effectiveness. The Food and Drug Administration (FDA) has developed draft guidance for how such tools should be considered. Within Duke University Health System, a governance framework has been developed for evaluating and monitoring the performance of CPMs to ensure their adequate performance. 
+Electronic health records (EHRs) data are widely used for clinical research. The abundance of available data, the low cost of obtaining those observational data, and its real-time nature have given EHR enormous potential to develop powerful predictive models. Researchers rely on EHR data extensively to predict the risk of clinical outcomes. As clinical prediction models (CPMs) find their way into clinical practice, it is important to develop systems and procedures to monitor their safety and effectiveness. The Food and Drug Administration (FDA) has developed draft guidance for how such tools should be considered. Within Duke University Health System, a governance framework has been developed for evaluating and monitoring the performance of CPMs to ensure their adequate performance.
 
 After implementing a CPM, medical professionals will use these models to inform clinical decision-making and allocation of interventions. Ideally, the intervention will prevent the outcome that the CPM is predicting. This leads to an important challenge: how do we evaluate CPMs in the presence of interventions? If the CPM is accurate, and the intervention is effective, those who are truly at risk of the adverse outcome will not actually have the event. To evaluate the CPM appropriately, we are interested in what the causal inference refers to as the counterfactual: the outcome that would have occurred without the intervention being deployed. Unfortunately, we do not observe this counterfactual.
 
-Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professionals’ judgment). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and the strategies we can use to address these challenges. We first propose possible causal models. Next, we use simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
+Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professionals' judgment). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough. As such, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and the strategies we can use to address these challenges. We first propose possible causal models. Next, we use simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
 
 ## 2. Challenges of using confounded EHR data in simulation
 
-During the initial stage of investigation, we proposed two possible causal models to illustrate and pinpoint the research problem. The variables included in the causal models are initial risk, intervention (`1` = intervention, `0` = no intervention), prevalence of disease, and the observed outcome (`1` = sick, `0` = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff (`CMI`) will receive intervention treatment. The effectiveness of treatment is decided by $\beta_{intervention}$. In general, a higher $\beta_{intervention}$ means lower effectiveness. We simulate three levels of disease prevalence rate: high (~50% population have the illness without intervention), moderate (~25% population have the illness without intervention), and low (~6% population have the illness without intervention). A highly prevalent disease includes hypertension, a moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes Chronic obstructive pulmonary disease. 
+During the initial stage of investigation, we proposed two possible causal models to illustrate and pinpoint the research problem. The variables included in the causal models are initial risk, intervention (`1` = intervention, `0` = no intervention), prevalence of disease, and the observed outcome (`1` = sick, `0` = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff (`CMI`) will receive intervention treatment. The effectiveness of treatment is decided by $\beta_{intervention}$. In general, a higher $\beta_{intervention}$ means lower effectiveness. We simulate three levels of disease prevalence rate: high (\~50% population have the illness without intervention), moderate (\~25% population have the illness without intervention), and low (\~6% population have the illness without intervention). A highly prevalent disease includes hypertension, a moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes Chronic obstructive pulmonary disease.
 
-The two causal models differ in their mechanisms to generate the final observed outcome with intervention. The first model calculates a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and also received intervention treatment. Depending on the treatment strength, the patient who would have been sick might end up become healthy. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider risk after intervention. Instead, depending on the intervention effectiveness factor $\beta_{intervention}$, we set (1-$\beta_{intervention}$) % of the population to be assigned to have no outcome (healthy) deterministically, which means their intervention is successful. 
+The two causal models only differ in their mechanisms to generate the final observed outcome with intervention. The first model calculates a new risk (risk after intervention) for patients who should have had outcome due to higher initial risk and also received intervention treatment. Depending on the treatment strength, the patient who would have been sick might end up become healthy. According to the new risk, the final observed outcome is generated probabilistically. The second model doesn't consider risk after intervention. Instead, depending on the intervention effectiveness factor $\beta_{intervention}$, we set (1-$\beta_{intervention}$) % of the population to be assigned to have no outcome (healthy) deterministically, which means their intervention is successful.
 
-In the real world, only the initial risk and observed outcome are known to health professionals. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. We choose to evaluate the models using area under the curve (AUC) based on fitted linear predictors and actual outcomes as well as calibration slope. These metrics are averaged over 100 simulations, with each simulation of 20000 observations. 
+In the real world, only the initial risk and observed outcome are known to health professionals. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. We choose to evaluate the models using area under the curve (AUC) based on fitted linear predictors and actual outcomes as well as calibration slope. These metrics are averaged over 100 simulations, with each simulation of 20000 observations.
 
 ### 2.1 Causal diagram 1
+
 ![Causal diagram 1](diagrams/f1.png)
 
-- Observed outcome (without intervention) is determined by a binomial distribution as following:
+-   n = 20000 observations are assigned an initial risk $risk_{t1}$ uniformly distributed from 0 to 1.
 
-$$x = prevalence + 5 \times risk_{t1}$$ where the AUC is controlled at around 0.8
-$$p = exp(x)/(1+exp(x))$$
-$$outcome = binomial(n,p)$$
-- CMI/Intervention is present when a patient has $risk_{t1}$ higher than a set `cmi_cutoff`.
+-   Observed outcome without intervention is determined by a binomial distribution as following:
 
-- $risk_{t2} = risk_{t1} \times \beta_{intervention}$ if a patient had an outcome and received treatment. Otherwise $risk_{t2}$ remains the same as $risk_{t1}$.
+$$x = prevalence + 5 \times risk_{t1}$$ where the AUC is controlled at around 0.8 $$p = exp(x)/(1+exp(x))$$ $$outcome = binomial(n,p)$$ 
 
-- For patients who had an outcome and received treatment, their observed outcome (with intervention) is re-generated. Say there are m patients like this, then $outcome = binomial(m, risk_{t2})$, while the outcomes of the rest remain to be their outcomes without intervention.
+-   CMI/Intervention is present when a patient has $risk_{t1}$ higher than a set `cmi_cutoff`.
+
+-   $risk_{t2} = risk_{t1} \times \beta_{intervention}$ if a patient had an outcome and received treatment. Otherwise $risk_{t2}$ remains the same as $risk_{t1}$.
+
+-   For patients who had an outcome and received treatment, their observed outcome (with intervention) is re-generated. Say there are m patients like this, then $outcome = binomial(m, risk_{t2})$, while the outcomes of the rest remain to be their outcomes without intervention.
 
 ```{r}
 set.seed(1)
@@ -118,8 +137,7 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence
 
 #### Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
-```{r}
-old_dir <- getwd()
+```{r cache=TRUE}
 sink(file = 'sink.txt', split = TRUE)
 
 cmi <- seq(0.1, 1, length.out=10)
@@ -182,7 +200,6 @@ for (p in 1:3) {
   
       auc_table[i,j] <- cur_auc/new_repeats
       calibration_table[i,j] <- cur_calibration/new_repeats
-      print(paste0("new repeats:", new_repeats))
       
     }
   }
@@ -192,9 +209,21 @@ for (p in 1:3) {
 sink(NULL)
 
 # remove outliers
+range(calibrationgrid_list)
+mean(calibrationgrid_list[[1]])
+mean(calibrationgrid_list[[2]])
+mean(calibrationgrid_list[[3]])
 for (p in 1:3){
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]]  > 2 | calibrationgrid_list[[p]]  < 0.6] <- mean(calibrationgrid_list[[p]])
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] > mean(calibrationgrid_list[[p]]) * 5] <- mean(calibrationgrid_list[[p]]) * 5
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] < mean(calibrationgrid_list[[p]]) * -5] <- mean(calibrationgrid_list[[p]]) * -5
 }
+
+calibration_range <- c(NA,6)
+for (p in 1:3){
+  calibration_range[2*p-1] <- range(calibrationgrid_list[[p]])[1]
+  calibration_range[2*p] <- range(calibrationgrid_list[[p]])[2]
+}
+calibration_range
 
 # plot
 auc_heatmap <- list()
@@ -207,48 +236,27 @@ for (p in 1:3){
 }
 cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
 
-brier_heatmap <- list()
-for (p in 1:3){
-  brier_heatmap[[p]] <- levelplot(briergrid_list[[p]] ~ X*Y, data=data_brier,
-                        main="Scaled Brier Score",
-                        xlab="b_int", ylab="cmi",
-                        col.regions = heat.colors(1000),
-                        at=seq(0, 0.5, by = 0.01),
-                        sub = paste0(" prevalence = ", prev[p]))
-}
-cowplot::plot_grid(plotlist = brier_heatmap, ncol = 2)
-
-mse_heatmap <- list()
-for (p in 1:3){
-  mse_heatmap[[p]] <- levelplot(msegrid_list[[p]] ~ X*Y, data=data_mse,
-                        main="Mean Squared Error",
-                        xlab="b_int", ylab="cmi",
-                        col.regions = rev(heat.colors(1000)),
-                        at=seq(0, 0.4, by = 0.01),
-                        sub = paste0(" prevalence = ", prev[p]),
-                        pretty = TRUE)
-}
-cowplot::plot_grid(plotlist = mse_heatmap, ncol = 2)
-
 calibration_heatmap <- list()
 for (p in 1:3){
   calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]] ~ X*Y, data=data_calibration,
                                         main="Calibration curve slope",
                                         xlab="b_int", ylab="cmi",
                                         col.regions = cm.colors(1000),
-                                        at=seq(0.6, 1.4, length.out=1000),
+                                        at=seq(-100, 100, length.out=1000),
                                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
+Model performance is highly influenced by the effectiveness of intervention and the criteria of intervention. For diseases that are moderately or highly prevalent, less effective intervention is associated with increasing AUC. This is intuitive because the power of confounding decreases as the intervention becomes weaker, and the predicted outcomes are closer to the ones under direct causal relationship between initial risk and outcome. Because AUC is a rank measure, making half of the population (`cmi` = 0.5) receive treatment presents the worst predictive performance at the same intervention levels. For rarer diseases, the influence of intervention effectiveness is not obvious, possibly due to the lack of incidents to begin with. Nonetheless, when the intervention is not effective at all, all models under 3 prevalence scenarios achieved the nearly ideal AUC score controlled at the start of simulation.
+
+Calibration?
 
 #### Influential variables on model performance
 
 ```{r}
-# df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
-# df  
-# names <- c("b_intervention", "cmi_cutoff", "prevalence", "AUC")
-# colnames(df) <- names
+df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
+names <- c("b_intervention", "cmi_cutoff", "prevalence", "AUC")
+colnames(df) <- names
 
 b_int <- seq(0.1,1,0.1)
 cmi <- seq(0.1,1,0.1)
@@ -256,30 +264,31 @@ prev <- prevalence
 var <- list(b_intervention = b_int, cmi_cutoff = cmi, prevalence = prev)
 df <- expand.grid(var)
 df$auc <- unlist(aucgrid_list)
-df$brier <-  unlist(msegrid_list)
 
 # fit logistic regression
 fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence,
            data = df)
 summary(fit1)
-# 
-# sum_table <-  data.frame(
-#   Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
-#   Estimate  = c(fit1$coefficients[2], fit1$coefficients[3], fit1$coefficients[4]),
-#   Std.error = c(0.010802, 0.010802, 0.002164),
-#   t_value   = c(3.322, 6.493, -14.161),
-#   p_value = c(0.001, "<0.001", "<0.001")
-# )
-# 
-# kable(
-#   sum_table,
-#   col.names = c(colnames(sum_table)),
-#   digits = 2,
-#   caption = "Relationship between AUC and predictors"
-# )
+
+sum_table <-  data.frame(
+  Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
+  Estimate  = c(fit1$coefficients[2], fit1$coefficients[3], fit1$coefficients[4]),
+  Std.error = c(sqrt(diag(vcov(fit1)))[1], sqrt(diag(vcov(fit1)))[2], sqrt(diag(vcov(fit1)))[3]),
+  p_value = c(summary(fit1)$coefficients[2,4], summary(fit1)$coefficients[3,4], summary(fit1)$coefficients[4,4])
+)
+
+kable(
+  sum_table,
+  col.names = c(colnames(sum_table)),
+  digits = 2,
+  caption = "Relationship between AUC and predictors"
+)
 ```
 
+We regress the intervention effectiveness, criteria of intervention, and prevalence on AUC to investigate how these 3 variables affect model performance. Under causal model 1, we conclude that both the intervention effectiveness, which is the source of confounding, as well as the criteria of intervention (`cmi`), are high influential on model performance.  
+
 ## 2.2 Causal diagram 2
+
 ![Causal diagram 2](diagrams/f2.png)
 
 ```{r}
@@ -314,9 +323,8 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff, prevalenc
 
 #### Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
-```{r results="hide"}
-# old_dir <- getwd()
-# sink(file = 'sink2.txt', split = TRUE)
+```{r cache=TRUE}
+sink(file = 'sink2.txt', split = TRUE)
 
 cmi <- seq(0.1, 0.9, length.out=9)
 b_int <- seq(0.1, 0.9, length.out=9)
@@ -324,10 +332,11 @@ b_int <- seq(0.1, 0.9, length.out=9)
 aucgrid_list <- list()
 calibrationgrid_list <- list()
 
-# counter <- 0
+counter <- 0
 foreach(p=1:3) %do% {
   data_auc <- expand.grid(X=cmi, Y=b_int)
   data_calibration <- expand.grid(X=cmi, Y=b_int)
+  new_repeats <- repeats
   
   auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
@@ -337,8 +346,8 @@ foreach(p=1:3) %do% {
       cur_auc <- 0
       cur_calibration <- 0
       for (k in 1:repeats){
-        # counter <- counter + 1
-        # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
+        counter <- counter + 1
+        if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f1(risk_t1,
                                        n,
                                        b_intervention = i/10,
@@ -358,20 +367,25 @@ foreach(p=1:3) %do% {
         x.test <- x[test,]
         y.test <- y[test,]
   
-        fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial, maxit = 100)
-        y.pred <- predict(fit, as.data.frame(x.test))
-  
-        # update auc and mse
-        cur_auc <- cur_auc + auc(y.test, y.pred)
-  
-        calibration_fit <- glm(y.test ~ y.pred, family = "binomial", data = as.data.frame(x.test))
-  
-        cur_calibration <- cur_calibration + calibration_fit$coefficients[2]
+        if (!mean(y.test) == 0) { 
+          fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
+          y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+
+          calibration_fit <- glm(y.test ~ y.pred, family = binomial, data =
+                                   as.data.frame(x.test))
+          
+          cur_auc = cur_auc + auc(y.test, y.pred)
+          cur_calibration = cur_calibration + calibration_fit$coefficients[2]
+        }
+        
+        else { # skip those with only 1 level of outcome
+          new_repeats = new_repeats - 1
+        }
+        counter <- counter + 1
       }
   
-      auc_table[i,j] <- cur_auc/repeats
-      calibration_table[i,j] <- cur_calibration/repeats
-      # print(paste0("b_intervention =", i, "cmi = ", j, "mse = ", mse_table[i,j]))
+      auc_table[i,j] <- cur_auc/new_repeats
+      calibration_table[i,j] <- cur_calibration/new_repeats
     }
   }
   aucgrid_list[[p]] <- auc_table
@@ -381,7 +395,8 @@ foreach(p=1:3) %do% {
 
 # remove outliers
 for (p in 1:3){
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]]  > 2 | calibrationgrid_list[[p]]  < 0.6] <- mean(calibrationgrid_list[[p]])
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] > mean(calibrationgrid_list[[p]]) * 5] <- mean(calibrationgrid_list[[p]]) * 5
+  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] < mean(calibrationgrid_list[[p]]) * -5] <- mean(calibrationgrid_list[[p]]) * -5
 }
 
 # plot
@@ -395,8 +410,6 @@ for (p in 1:3){
                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
-
-cowplot::plot_grid(plotlist = mse_heatmap, ncol = 2)
 
 calibration_heatmap <- list()
 for (p in 1:3){
@@ -413,10 +426,9 @@ cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 #### Important variables
 
 ```{r}
-# df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
-# df  
-# names <- c("b_intervention", "cmi_cutoff", "prevalence", "AUC")
-# colnames(df) <- names
+df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
+names <- c("b_intervention", "cmi_cutoff", "prevalence", "AUC")
+colnames(df) <- names
 
 b_int <- seq(0.1,0.9,0.1)
 cmi <- seq(0.1,0.9,0.1)
@@ -424,47 +436,50 @@ prev <- prevalence
 var <- list(b_intervention = b_int, cmi_cutoff = cmi, prevalence = prev)
 df <- expand.grid(var)
 df$auc <- unlist(aucgrid_list)
-df$brier <-  unlist(msegrid_list)
+df$calibration <- unlist(calibrationgrid_list)
 
 # fit logistic regression
-fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence,
-           data = df)
-fit2 <- lm(brier ~ cmi_cutoff^2 + b_intervention + prevalence,
-           data = df)
+fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence, data = df)
+fit2 <- lm(calibration ~ cmi_cutoff^2 + b_intervention + prevalence, data = df)
 summary(fit1)
+summary(fit2)
 
-# sum_table <-  data.frame(
-#   Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
-#   Estimate  = c(0.035880, 0.070138, -0.030645),
-#   Std.error = c(0.010802, 0.010802, 0.002164),
-#   t_value   = c(3.322, 6.493, -14.161),
-#   p_value = c(0.001, "<0.001", "<0.001")
-# )
-# 
-# kable(
-#   sum_table,
-#   col.names = c(colnames(sum_table)),
-#   digits = 2,
-#   caption = "Relationship between AUC and predictors"
-# )
+sum_table <-  data.frame(
+  Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
+  Estimate  = c(fit1$coefficients[2], fit1$coefficients[3], fit1$coefficients[4]),
+  Std.error = c(sqrt(diag(vcov(fit1)))[1], sqrt(diag(vcov(fit1)))[2], sqrt(diag(vcov(fit1)))[3]),
+  p_value = c(summary(fit1)$coefficients[2,4], summary(fit1)$coefficients[3,4], summary(fit1)$coefficients[4,4])
+)
+
+kable(
+  sum_table,
+  col.names = c(colnames(sum_table)),
+  digits = 2,
+  caption = "Relationship between AUC and predictors"
+)
 
 ```
 
-We have illustrated the research question by simulating health risks as well as intervention percentage and effectiveness. We identified the scenarios where prediction models are prone to low prediction power, high error rate, and poor calibration. In general, rarer diseases have a high error rate and overall underestimation of health outcome and also presents an AUC trend different from higher prevalent diseases. In terms of the 3 evaluation metrics, the prediction model performs the best when a disease is highly prevalent (50%) and treatment is almost not effective at all. However, this is not an ideal scenario in the real world. 
+Model performance under causal model 2 shows a similar trend as causal model 2. While the intervention effectiveness is still influential on AUC, the criteria of intervention (`cmi`) is not. Although prevalence appears to be a significant independent variable, its standard error is larger than coefficient estimate, suggesting a lack of precise measurement of the coefficient.
+
+In summary, it is clear that Confounding by Medical Interventions (CMIs) is a challenge to effective prediction of clinical models. First, the criteria of intervention directly affects the percentage of population who receives treatment. The clinical model works the best when this percentage is very large or very small. Second, the more effective intervention is, the weaker tha ability of our classifier to distinguish between healthy and sick subjects. Two potential solutions under two medical service scenarios are proposed in the next section.
+
+????We have illustrated the research question by simulating health risks. We identified the scenarios where prediction models are prone to low prediction power, high error rate, and poor calibration. In general, rarer diseases have a high error rate and overall underestimation of health outcome and also presents an AUC trend different from higher prevalent diseases. In terms of the 3 evaluation metrics, the prediction model performs the best when a disease is highly prevalent (50%) and treatment is almost not effective at all. However, this is not an ideal scenario in the real world.????
 
 ## 3. Developing predticive models with knowledge of confounding
+
+We proposed 2 approaches: 1) adjusted posterior risk by estimating the effect of intervention
 
 ```{r}
 n <- 40000
 repeats <- 50 # for simulation
 ```
 
-We explored methods that mitigate the problems mentioned in the above sections. 
-
 ### 3.1 Resource-constrained intervention
+
 #### 3.1.1 Adjusted posterior risk approach
 
-```{r}
+```{r cache=TRUE}
 # prev = -4: don't work when cmi > 0.8
 # prev = -2.5: don't work when b_int > 0.6 and when cmi > 0.5
 
@@ -580,10 +595,9 @@ for (row in 1:dim(model_sum_lb)[1]){
 }
 ```
 
-
 #### 3.1.2 Stratified approach
 
-```{r}
+```{r cache=TRUE}
 # all results present
 set.seed(10)
 model_sum <- expand.grid(prev = prevalence,
@@ -699,7 +713,7 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,prevalence){
 
 #### 3.2.1 Adjusted posterior risk approach
 
-```{r}
+```{r cache=TRUE}
 # only prev = -6
 model_sum_lb2 <- expand.grid(prev = prevalence,
                             b_int = seq(0.1, 0.9, 0.1),
@@ -807,7 +821,7 @@ for (row in 1:dim(model_sum_lb2)[1]){
 
 #### 3.2.2 Stratified approach
 
-```{r}
+```{r cache=TRUE}
 # all results present
 model_sum2 <- expand.grid(prev = prevalence,
                          b_int = seq(0.1, 0.9, 0.1),
@@ -971,5 +985,3 @@ i1_int_plot
 ```
 
 ## 4. Conclusion
-
-
