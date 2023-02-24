@@ -140,8 +140,6 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence
 #### 2.1.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
 ```{r cache=TRUE}
-# sink(file = 'sink.txt', split = TRUE)
-
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
 
@@ -184,13 +182,15 @@ for (p in 1:3) {
         
         if (!mean(y.test) == 0) { 
           fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
-          y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+          y.pred_a <- predict(fit, as.data.frame(x.test), type = "response")
+          y.pred_c <- predict(fit, as.data.frame(x.test))
           # fit_all <- glm(c$outcome_int ~ risk_t1, data = c, family = binomial)
           
-          calibration_fit <- glm(y.test ~ y.pred, family = binomial, data =
+          calibration_fit <- glm(y.test ~ y.pred_c, family = binomial, data =
                                    as.data.frame(x.test))
+          # summary(calibration_fit)
           
-          cur_auc = cur_auc + auc(y.test, y.pred)
+          cur_auc = cur_auc + auc(y.test, y.pred_a)
           cur_calibration = cur_calibration + calibration_fit$coefficients[2]
         }
         
@@ -208,17 +208,16 @@ for (p in 1:3) {
   aucgrid_list[[p]] <- auc_table
   calibrationgrid_list[[p]] <- calibration_table
 }
-# sink(NULL)
 
 # remove outliers
 # range(calibrationgrid_list)
 # mean(calibrationgrid_list[[1]])
 # mean(calibrationgrid_list[[2]])
 # mean(calibrationgrid_list[[3]])
-for (p in 1:3){
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] > mean(calibrationgrid_list[[p]]) * 5] <- mean(calibrationgrid_list[[p]]) * 5
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] < mean(calibrationgrid_list[[p]]) * -5] <- mean(calibrationgrid_list[[p]]) * -5
-}
+# for (p in 1:3){
+#   calibrationgrid_list[[p]] [calibrationgrid_list[[p]] > mean(calibrationgrid_list[[p]]) * 5] <- mean(calibrationgrid_list[[p]]) * 5
+#   calibrationgrid_list[[p]] [calibrationgrid_list[[p]] < mean(calibrationgrid_list[[p]]) * -5] <- mean(calibrationgrid_list[[p]]) * -5
+# }
 
 calibration_range <- c(NA,6)
 for (p in 1:3){
@@ -244,14 +243,14 @@ for (p in 1:3){
                                         main="Calibration curve slope",
                                         xlab="b_int", ylab="cmi",
                                         col.regions = cm.colors(1000),
-                                        at=seq(-100, 100, length.out=1000),
+                                        at=seq(0.8, 1.2, length.out=1000),
                                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
 Model performance is highly influenced by the effectiveness of intervention and the criteria of intervention. For diseases that are moderately or highly prevalent, less effective intervention is associated with increasing AUC. This is intuitive because the power of confounding decreases as the intervention becomes weaker, and the predicted outcomes are closer to the ones under direct causal relationship between initial risk and outcome. Because AUC is a rank measure, making half of the population (`cmi` = 0.5) receive treatment presents the worst predictive performance at the same intervention levels. For rarer diseases, the influence of intervention effectiveness is not obvious, possibly due to the lack of incidents to begin with. Nonetheless, when the intervention is not effective at all, all models under 3 prevalence scenarios achieved the nearly ideal AUC score controlled at the start of simulation.
 
-?????Calibration?????
+[Add calibration description]
 
 #### 2.1.2 Influential variables on model performance
 
@@ -325,8 +324,6 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff, prevalenc
 #### 2.2.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
 ```{r cache=TRUE}
-# sink(file = 'sink2.txt', split = TRUE)
-
 cmi <- seq(0.1, 0.9, length.out=9)
 b_int <- seq(0.1, 0.9, length.out=9)
 
@@ -349,7 +346,7 @@ for (p in 1:3){
       for (k in 1:repeats){
         # counter <- counter + 1
         # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
-        c <- as.data.frame(gen_outcome_f1(risk_t1,
+        c <- as.data.frame(gen_outcome_f2(risk_t1,
                                        n,
                                        b_intervention = i/10,
                                        cmi_cutoff = j/10,
@@ -370,12 +367,13 @@ for (p in 1:3){
   
         if (!mean(y.test) == 0) { 
           fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
-          y.pred <- predict(fit, as.data.frame(x.test), type = "response")
+          y.pred_a <- predict(fit, as.data.frame(x.test), type = "response")
+          y.pred_c <- predict(fit, as.data.frame(x.test))
 
-          calibration_fit <- glm(y.test ~ y.pred, family = binomial, data =
+          calibration_fit <- glm(y.test ~ y.pred_c, family = binomial, data =
                                    as.data.frame(x.test))
           
-          cur_auc = cur_auc + auc(y.test, y.pred)
+          cur_auc = cur_auc + auc(y.test, y.pred_a)
           cur_calibration = cur_calibration + calibration_fit$coefficients[2]
         }
         
@@ -391,13 +389,6 @@ for (p in 1:3){
   }
   aucgrid_list[[p]] <- auc_table
   calibrationgrid_list[[p]] <- calibration_table
-}
-# sink(NULL)
-
-# remove outliers
-for (p in 1:3){
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] > mean(calibrationgrid_list[[p]]) * 5] <- mean(calibrationgrid_list[[p]]) * 5
-  calibrationgrid_list[[p]] [calibrationgrid_list[[p]] < mean(calibrationgrid_list[[p]]) * -5] <- mean(calibrationgrid_list[[p]]) * -5
 }
 
 # plot
@@ -418,7 +409,7 @@ for (p in 1:3){
                                         main="Calibration curve slope",
                                         xlab="b_int", ylab="cmi",
                                         col.regions = cm.colors(1000),
-                                        at=seq(0.6, 1.4, length.out=1000),
+                                        at=seq(0.8, 1.2, length.out=1000),
                                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
