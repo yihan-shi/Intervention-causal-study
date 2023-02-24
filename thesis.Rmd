@@ -5,6 +5,8 @@ date: "`r Sys.Date()`"
 output:
   pdf_document: default
   html_document: default
+header-includes:
+    - \usepackage{setspace}\doublespacing
 fig_width: 10
 fig_height: 8
 ---
@@ -14,7 +16,7 @@ fig_height: 8
 ```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       fig.align = 'center', fig.pos = "H", out.extra = '',
-                      out.width = "60%", eval = FALSE)
+                      out.width = "60%", cache = TRUE, eval = TRUE)
 ```
 
 ```{r}
@@ -58,7 +60,7 @@ In the real world, only the initial risk and observed outcome are known to healt
 
 -   Observed outcome without intervention is determined by a binomial distribution as following:
 
-$$x = prevalence + 5 \times risk_{t1}$$ where the AUC is controlled at around 0.8 $$p = exp(x)/(1+exp(x))$$ $$outcome = binomial(n,p)$$ 
+$x = prevalence + 5 \times risk_{t1}$ where the AUC is controlled at around 0.8 $$p = exp(x)/(1+exp(x))$$ $$outcome = binomial(n,p)$$ 
 
 -   CMI/Intervention is present when a patient has $risk_{t1}$ higher than a set `cmi_cutoff`.
 
@@ -135,17 +137,17 @@ gen_outcome_f1 <- function(risk_t1, n = n, b_intervention,cmi_cutoff, prevalence
 }
 ```
 
-#### Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
+#### 2.1.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
 ```{r cache=TRUE}
-sink(file = 'sink.txt', split = TRUE)
+# sink(file = 'sink.txt', split = TRUE)
 
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
 
 aucgrid_list <- list()
 calibrationgrid_list <- list()
-counter <- 0
+# counter <- 0
 
 for (p in 1:3) {
   data_auc <- expand.grid(X=cmi, Y=b_int)
@@ -160,7 +162,7 @@ for (p in 1:3) {
       cur_auc <- 0
       cur_calibration <- 0
       for (k in 1:repeats){
-        if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
+        # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f1(risk_t1,
                                        n,
                                        b_intervention = i/10,
@@ -195,7 +197,7 @@ for (p in 1:3) {
         else { # skip those with only 1 level of outcome
           new_repeats = new_repeats - 1
         }
-        counter <- counter + 1
+        # counter <- counter + 1
       }
   
       auc_table[i,j] <- cur_auc/new_repeats
@@ -206,13 +208,13 @@ for (p in 1:3) {
   aucgrid_list[[p]] <- auc_table
   calibrationgrid_list[[p]] <- calibration_table
 }
-sink(NULL)
+# sink(NULL)
 
 # remove outliers
-range(calibrationgrid_list)
-mean(calibrationgrid_list[[1]])
-mean(calibrationgrid_list[[2]])
-mean(calibrationgrid_list[[3]])
+# range(calibrationgrid_list)
+# mean(calibrationgrid_list[[1]])
+# mean(calibrationgrid_list[[2]])
+# mean(calibrationgrid_list[[3]])
 for (p in 1:3){
   calibrationgrid_list[[p]] [calibrationgrid_list[[p]] > mean(calibrationgrid_list[[p]]) * 5] <- mean(calibrationgrid_list[[p]]) * 5
   calibrationgrid_list[[p]] [calibrationgrid_list[[p]] < mean(calibrationgrid_list[[p]]) * -5] <- mean(calibrationgrid_list[[p]]) * -5
@@ -223,7 +225,7 @@ for (p in 1:3){
   calibration_range[2*p-1] <- range(calibrationgrid_list[[p]])[1]
   calibration_range[2*p] <- range(calibrationgrid_list[[p]])[2]
 }
-calibration_range
+# calibration_range
 
 # plot
 auc_heatmap <- list()
@@ -251,7 +253,7 @@ Model performance is highly influenced by the effectiveness of intervention and 
 
 ?????Calibration?????
 
-#### Influential variables on model performance
+#### 2.1.2 Influential variables on model performance
 
 ```{r}
 df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
@@ -268,7 +270,7 @@ df$auc <- unlist(aucgrid_list)
 # fit logistic regression
 fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence,
            data = df)
-summary(fit1)
+# summary(fit1)
 
 sum_table <-  data.frame(
   Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
@@ -279,8 +281,7 @@ sum_table <-  data.frame(
 
 kable(
   sum_table,
-  col.names = c(colnames(sum_table)),
-  digits = 2,
+  digits = 3,
   caption = "Relationship between AUC and predictors"
 )
 ```
@@ -321,10 +322,10 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention, cmi_cutoff, prevalenc
 # a <- gen_outcome_f2(risk_t1, n = n, b_intervention = 9/10, cmi_cutoff = 0.3, prevalence = prevalence[2])
 ```
 
-#### Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
+#### 2.2.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
 ```{r cache=TRUE}
-sink(file = 'sink2.txt', split = TRUE)
+# sink(file = 'sink2.txt', split = TRUE)
 
 cmi <- seq(0.1, 0.9, length.out=9)
 b_int <- seq(0.1, 0.9, length.out=9)
@@ -332,11 +333,11 @@ b_int <- seq(0.1, 0.9, length.out=9)
 aucgrid_list <- list()
 calibrationgrid_list <- list()
 
-counter <- 0
-foreach(p=1:3) %do% {
+# counter <- 0
+for (p in 1:3){
   data_auc <- expand.grid(X=cmi, Y=b_int)
   data_calibration <- expand.grid(X=cmi, Y=b_int)
-  new_repeats <- repeats
+  # new_repeats <- repeats
   
   auc_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
   calibration_table <- matrix(NA, nrow = length(cmi), ncol = length(cmi))
@@ -346,8 +347,8 @@ foreach(p=1:3) %do% {
       cur_auc <- 0
       cur_calibration <- 0
       for (k in 1:repeats){
-        counter <- counter + 1
-        if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
+        # counter <- counter + 1
+        # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f1(risk_t1,
                                        n,
                                        b_intervention = i/10,
@@ -381,7 +382,7 @@ foreach(p=1:3) %do% {
         else { # skip those with only 1 level of outcome
           new_repeats = new_repeats - 1
         }
-        counter <- counter + 1
+        # counter <- counter + 1
       }
   
       auc_table[i,j] <- cur_auc/new_repeats
@@ -423,7 +424,7 @@ for (p in 1:3){
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
 
-#### Important variables
+#### 2.2.2 Influential variables on model performance
 
 ```{r}
 df <- data.frame(matrix(NA, nrow = 0, ncol = 4))
@@ -441,8 +442,8 @@ df$calibration <- unlist(calibrationgrid_list)
 # fit logistic regression
 fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + prevalence, data = df)
 fit2 <- lm(calibration ~ cmi_cutoff^2 + b_intervention + prevalence, data = df)
-summary(fit1)
-summary(fit2)
+# summary(fit1)
+# summary(fit2)
 
 sum_table <-  data.frame(
   Variable = c("cmi_cutoff", "b_intervention", "prevalence"),
@@ -453,8 +454,7 @@ sum_table <-  data.frame(
 
 kable(
   sum_table,
-  col.names = c(colnames(sum_table)),
-  digits = 2,
+  digits = 3,
   caption = "Relationship between AUC and predictors"
 )
 
@@ -484,6 +484,7 @@ Simulated observations is divided into two groups: intervened (`cmi` = 1) and no
 ```{r}
 n <- 40000
 repeats <- 50 # for simulation
+risk_t1 <- runif(n, 0, 1)
 ```
 
 ### 3.1 Resource-constrained intervention
@@ -505,7 +506,7 @@ model_sum_lb <- expand.grid(prev = prevalence,
 set.seed(10)
 for (row in 1:dim(model_sum_lb)[1]){
 # for (row in 111:111) {
-  print(paste0("row", row))
+  # print(paste0("row", row))
   auc <- 0
   auc_uncorrected <- 0
 
@@ -542,7 +543,7 @@ for (row in 1:dim(model_sum_lb)[1]){
 
     if(inherits(possibleError, "error")) {
       auc = 0
-      print("supply starting value error")
+      # print("supply starting value error")
       break
     }
     fit_again <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "log"), start = coef(fit))
@@ -564,7 +565,7 @@ for (row in 1:dim(model_sum_lb)[1]){
     )
 
     if(inherits(possibleError, "error")) {
-      print("log-binomial model has invalid starting values")
+      # print("log-binomial model has invalid starting values")
       auc = 0
       break
     }
@@ -588,7 +589,7 @@ for (row in 1:dim(model_sum_lb)[1]){
     )
 
     if(inherits(possibleError, "error")) {
-      print("log-binomial model has invalid starting values")
+      # print("log-binomial model has invalid starting values")
       auc = 0
       break
     }
@@ -620,7 +621,7 @@ model_sum <- expand.grid(prev = prevalence,
 # row <- 1
 for (row in 1:dim(model_sum)[1]){
 # for (row in 1:1){
-  print(paste0("row", row))
+  # print(paste0("row", row))
   # mse <- rep(NA, 100)
   auc <- 0
   auc_uncorrected <- 0
@@ -633,7 +634,7 @@ for (row in 1:dim(model_sum)[1]){
                                       cmi_cutoff = model_sum$cmi[row],
                                       prevalence = model_sum$prev[row]))
 
-    fit <- glm(outcome_int ~ risk_t1, data = df, family = binomial)
+    fit <- glm(outcome_int ~ risk_t1 , data = df, family = binomial)
     y.pred <- predict(fit, as.data.frame(df), type = "response")
 
     have_cmi <- df %>%
@@ -655,7 +656,7 @@ for (row in 1:dim(model_sum)[1]){
 
     if(inherits(possibleError, "error")) {
       auc = 0
-      print("No-intervention group have no outcome")
+      # print("No-intervention group have no outcome")
       break
     }
 
@@ -686,12 +687,12 @@ gen_cmi_2 <- function(risk_t1, n = n, prevalence){
 df <- gen_cmi_2(risk_t1, n, prevalence = -2.5)
 a <- df %>%
   filter(cmi == 1)
-mean(a$prob)
-mean(a$risk)
+# mean(a$prob)
+# mean(a$risk)
 
 b <- df %>%
   filter(cmi == 0)
-mean(b$risk)
+# mean(b$risk)
 
 gen_risk_t2_2 <- function(risk_t1, n = n, b_intervention, prevalence){
   # if cmi == 1 & outcome_noint == 1, then risk_t2 = risk_t1 * b_intervention
@@ -734,7 +735,7 @@ model_sum_lb2 <- expand.grid(prev = prevalence,
 set.seed(10)
 for (row in 1:dim(model_sum_lb2)[1]){
 # for (row in 1:1){
-  print(paste0("row", row))
+  # print(paste0("row", row))
   auc <- 0
   auc_uncorrected <- 0
 
@@ -770,7 +771,7 @@ for (row in 1:dim(model_sum_lb2)[1]){
 
     if(inherits(possibleError, "error")) {
       auc = 0
-      print("supply starting value error")
+      # print("supply starting value error")
       break
     }
     fit_again <- glm(y.train ~ risk_t1, data = x.train, family = binomial(link = "log"), start = coef(fit))
@@ -814,7 +815,7 @@ for (row in 1:dim(model_sum_lb2)[1]){
 
     if(inherits(possibleError, "error")) {
       auc = 0
-      print("supply starting value error")
+      # print("supply starting value error")
       break
     }
     fit_lb2_again <- glm(y.train ~ new_risk, data = x.train_2, family = binomial(link = "log"), start = coef(fit_lb2))
@@ -842,7 +843,7 @@ model_sum2 <- expand.grid(prev = prevalence,
 set.seed(10)
 for (row in 1:dim(model_sum2)[1]){
 # for (row in 243:243){
-  print(paste0("row", row))
+  # print(paste0("row", row))
   auc <- 0
   auc_uncorrected <- 0
 
@@ -874,7 +875,7 @@ for (row in 1:dim(model_sum2)[1]){
 
     if(inherits(possibleError, "error")) {
       auc = 0
-      print("No-intervention group have no outcome")
+      # print("No-intervention group have no outcome")
       break
     }
 
@@ -921,7 +922,7 @@ i1_df_plot <- i1 %>%
   pivot_longer(cols = starts_with("auc"),
                names_to = "method",
                values_to = "auc_change")
-i1_df_plot
+# i1_df_plot
 
 i1_prev_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_change)) +
   geom_boxplot() +
@@ -974,7 +975,7 @@ i2_df_plot <- i2 %>%
   pivot_longer(cols = starts_with("auc"),
                names_to = "method",
                values_to = "auc_change")
-i2_df_plot
+# i2_df_plot
 
 i2_prev_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_change)) +
   geom_boxplot() +
