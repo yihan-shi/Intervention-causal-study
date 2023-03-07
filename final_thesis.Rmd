@@ -16,12 +16,14 @@ fig_height: 8
 ```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
                       fig.align = 'center', fig.pos = "H", out.extra = '',
-                      out.width = "60%", cache = TRUE, eval = TRUE)
+                      out.width = "60%", cache = FALSE, eval = TRUE)
 ```
 
 ```{r}
 library(kableExtra)
 library("lattice")
+library(gridExtra)
+library(gtable)
 library(tidyverse)
 library(dplyr)
 library(piercer)
@@ -30,6 +32,7 @@ library(ggplot2)
 library(prodlim)
 library(broom)
 library(gtsummary)
+library("ggpubr")
 library(foreach)
 library(pROC)
 library(predtools)
@@ -81,13 +84,14 @@ b_intervention <- 0.2
 risk_t1 <- runif(n, 0, 1)
 
 prevalence <- c(-6, -4, -2.5)
-prev <- c("low", "mid", "high") 
+# prev <- c("low", "mid", "high") 
+prev <- c("low (6%)", "mid (25%)", "high (50%)") 
 ```
 
 
-#### 2.1.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
+#### 2.1.1 Model evalucation under varying intervention effectiveness $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
 
-```{r cache=TRUE}
+```{r}
 cmi <- seq(0.1, 1, length.out=10)
 b_int <- seq(0.1, 1, length.out=10)
 data_auc <- expand.grid(X=cmi, Y=b_int)
@@ -95,27 +99,49 @@ data_calibration <- expand.grid(X=cmi, Y=b_int)
 
 aucgrid_list <- readRDS("data/causal1_auc_eval")
 calibrationgrid_list <- readRDS("data/causal1_calibration_eval")
+```
 
+
+```{r fig.align='center', fig.width= '100%', out.width="95%"}
 # plot
 auc_heatmap <- list()
 for (p in 1:3){
   auc_heatmap[[p]] <- levelplot(aucgrid_list[[p]] ~ X*Y, data=data_auc,
-                        main="AUC",
-                         xlab="intervention effectiveness (b_int)",
-                        ylab="intervention cutoff (cmi)",
+                        main="AUC", 
+                         xlab="intervention effectiveness",
+                        ylab="intervention cutoff",
                         xlim = c(1, 0),
                         col.regions = rev(heat.colors(1000)),
                         at=seq(0.45, 1, length.out=1000),
                         sub = paste0(" prevalence = ", prev[p]))
 }
 cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
+```
 
+```{r fig.align='center', fig.width= '100%', out.width="65%"}
+# p1 <- auc_heatmap[[1]]
+# p1
+```
+
+```{r fig.align='center', fig.width= '100%', out.width="65%"}
+# p2 <- auc_heatmap[[2]]
+# p2
+```
+
+```{r fig.align='center', fig.width= '100%', out.width="65%", fig.cap="Area under the curve decreases as intervention becomes more effective"}
+# p3 <- auc_heatmap[[3]]
+# p3
+```
+
+
+
+```{r  fig.align='center', fig.width= '100%', out.width="95%", fig.cap="(a) Area under the curve decreases as intervention becomes more effective (b) More over- and under-estimation as intervention becomes more effective"}
 calibration_heatmap <- list()
 for (p in 1:3){
   calibration_heatmap[[p]] <- levelplot(calibrationgrid_list[[p]] ~ X*Y, data=data_calibration,
-                                        main="Calibration curve slope",
-                                        xlab="intervention effectiveness (b_int)",
-                                        ylab="intervention cutoff (cmi)",
+                                        main="Calibration slope",
+                                        xlab="intervention effectiveness",
+                                        ylab="intervention cutoff",
                                         xlim = c(1,0),
                                         col.regions = rev(cm.colors(1000)),
                                         at=seq(0.8, 1.2, length.out=1000),
@@ -123,6 +149,23 @@ for (p in 1:3){
 }
 cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
+
+```{r fig.align='center', fig.width= '100%', out.width="65%"}
+# p4 <- calibration_heatmap[[1]]
+# p4
+```
+
+```{r fig.align='center', fig.width= '100%', out.width="65%"}
+# p5 <- calibration_heatmap[[2]]
+# p5
+```
+
+```{r fig.align='center', fig.width= '100%', out.width="65%", fig.cap="More over- and under-estimation as intervention becomes more effective"}
+# p6 <- calibration_heatmap[[3]]
+# p6
+```
+
+
 Model performance is highly influenced by the effectiveness of intervention and the criteria of intervention. For diseases that are moderately or highly prevalent, less effective intervention is associated with increasing AUC. This is intuitive because the power of confounding decreases as the intervention becomes weaker, and the predicted outcomes are closer to the ones under direct causal relationship between initial risk and outcome. Because AUC is a rank measure, making half of the population (`cmi` = 0.5) receive treatment presents the worst predictive performance at the same intervention levels. For rarer diseases, the influence of intervention effectiveness is not obvious, possibly due to the lack of incidents to begin with. Nonetheless, when the intervention is not effective at all, all models under 3 prevalence scenarios achieved the nearly ideal AUC score controlled at the start of simulation.
 
 [Add calibration description]
@@ -132,7 +175,7 @@ Model performance is highly influenced by the effectiveness of intervention and 
 We regress the intervention effectiveness, criteria of intervention, and prevalence on AUC to investigate how these 3 variables affect model performance. Under causal model 1, we conclude that both the intervention effectiveness, which is the source of confounding, as well as the criteria of intervention (`cmi`), are high influential on model performance.  
 
 $$
-\text{area under the curve} = \beta_0 + \beta_1 \times \text{cmi cutoff}^{2} + \beta_2 \times \text{b_intervention} + \beta_2 \times \text{prevalence}
+\text{area under the curve} = \beta_0 + \beta_1 \times \text{cmi cutoff} + \beta_2 \times \text{cmi cutoff}^{2} + \beta_{intervention} \times \text{intervention effectiveness} + \beta_3 \times \text{prevalence}
 $$
 
 ```{r}
@@ -142,19 +185,25 @@ colnames(df) <- names
 
 b_int <- seq(0.1,1,0.1)
 cmi <- seq(0.1,1,0.1)
-prev <- prevalence
-var <- list(b_intervention = b_int, cmi_cutoff = cmi, prevalence = prev)
+# prev <- prevalence
+var <- list(b_intervention = b_int, cmi_cutoff = cmi, prevalence = prevalence)
 df <- expand.grid(var)
 df$auc <- unlist(aucgrid_list)
 
 # fit logistic regression
-fit1 <- lm(auc ~ cmi_cutoff^2 + b_intervention + as.factor(prevalence),
+fit1 <- lm(auc ~ cmi_cutoff + I(cmi_cutoff^2) + b_intervention + as.factor(prevalence),
            data = df)
 summ <- tidy(summary(fit1))
 ci <- confint(fit1)
 summ_final <- cbind(summ, ci) %>%
   select(-c(1,3,4,5))
 
+summ_final$`95% CI` <- paste0("[", round(summ_final$`2.5 %`,3), ", ", round(summ_final$`97.5 %`,3), "]")
+
+summ_final <- summ_final %>% 
+  select(-c(2,3))
+
+rownames(summ_final) <- c("Intercept","cmi cutoff","(cmi cutoff)^2","intervention effectiveness", "prevalence (mid vs. low)", "prevalence (high vs. low)")
 
 kable(
   summ_final,
@@ -169,9 +218,9 @@ kable(
 ![Causal diagram 2](diagrams/f2.png)
 
 
-#### 2.2.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$
+#### 2.2.1 Model evalucation under varying intervention effectiveness $\beta_{intervention}$
 
-```{r cache=TRUE}
+```{r out.width="100%", fig.width = "50%"}
 b_int <- seq(0.1, 0.9, length.out=9)
 
 auc_list <- readRDS("data/causal2_auc_eval")
@@ -184,28 +233,28 @@ ideal_auc <- readRDS("data/causal2_ideal_auc")
 par(mfrow = c(2, 3))
 for (p in 1:3){
   plot(auc_list[[p]] ~ b_int,
-       xlab="intervention effectiveness (b_int)",
+       xlab="intervention effectiveness",
        xlim = rev(range(b_int)),
        ylim = c(0.45, 1),
        ylab = "AUC",
-       type = "b", sub = paste0("prevalence: ",
-                                prev[p], "; % intervention: ",
-                                round(mean(cmi_perclist[[p]]),2))
+       type = "b", sub = paste0("prevalence and % intervention : ",
+                                prev[p])
   )
   axis(side=1, at=10:1, labels = seq(1, 0.1, -0.1), tick = TRUE)
   abline(h = ideal_auc[p], col = "red")
 }
+```
 
 
+```{r out.width="100%",  fig.width = "50%", fig.cap="(a) Area under the curve decreases as intervention becomes more effective (b) Calibration is consistent around 1 indicating little over- or under- estimation"}
 par(mfrow = c(2, 3))
 for (p in 1:3){
   plot(calibrationg_list[[p]] ~ b_int,
        xlab = "b_intervention",
        xlim = rev(range(b_int)),
-       ylab = "AUC", ylim = c(0.8, 1.2),
-       type = "b", sub = paste0("prevalence: ",
-                                prev[p], "; % intervention: ",
-                                round(mean(cmi_perclist[[p]]),2))
+       ylab = "Calibration slope", ylim = c(0.8, 1.2),
+       type = "b", sub = paste0("prevalence and % intervention : ",
+                                prev[p])
        )
   axis(side=1, at=10:1, labels = seq(1, 0.1, -0.1), tick = TRUE)
   abline(h = 1, col = "red")
@@ -215,7 +264,7 @@ for (p in 1:3){
 #### 2.2.2 Influential variables on model performance
 
 $$
-\text{area under the curve} = \beta_0 + \beta_1 \times \text{b_intervention} + \beta_3 \times \text{prevalence}
+\text{area under the curve} = \beta_0 + \beta_1 \times \text{b$_{intervention}$} + \beta_3 \times \text{prevalence}
 $$
 
 ```{r}
@@ -224,8 +273,8 @@ names <- c("b_intervention", "prevalence", "AUC")
 colnames(df) <- names
 
 b_int <- seq(0.1,0.9,0.1)
-prev <- prevalence
-var <- list(b_intervention = b_int, prevalence = prev)
+# prev <- prevalence
+var <- list(b_intervention = b_int, prevalence = prevalence)
 df <- expand.grid(var)
 df$auc <- unlist(auc_list)
 df$calibration <- unlist(calibrationg_list)
@@ -239,6 +288,13 @@ ci2 <- confint(fit2)
 summ2_final <- cbind(summ2, ci2) %>%
   select(-c(1,3,4,5))
 
+summ2_final$`95% CI` <- paste0("[", round(summ2_final$`2.5 %`,3), ", ", round(summ2_final$`97.5 %`,3), "]")
+
+summ2_final <- summ2_final %>% 
+  select(-c(2,3))
+
+
+rownames(summ2_final) <- c("Intercept","intervention effectiveness", "prevalence (mid vs. low)", "prevalence (high vs. low)")
 
 kable(
   summ2_final,
@@ -276,29 +332,48 @@ Simulated observations is divided into two groups: intervened (`cmi` = 1) and no
 
 ```{r}
 # intervention 1
-i1 <- read.csv("data/model_sum_0306.csv")
-i1_lb <- read.csv("data/model_sum_lb_0306.csv")
+i1 <- read.csv("data/model_sum_0306.csv") %>% 
+  rename(
+    corrected = auc_corrected_bias,
+    uncorrected = auc_uncorrected_bias
+    )
+i1_lb <- read.csv("data/model_sum_lb_0306.csv") %>% 
+    rename(
+    corrected = auc_corrected_bias,
+    uncorrected = auc_uncorrected_bias
+    )
 
 i1_df_plot <- i1 %>%
-  inner_join(i1_lb, by = c("prev", "b_int", "cmi"), suffix = c(".weighted_auc", ".adjusted_risk")) %>%
-  pivot_longer(cols = starts_with("auc"),
+  inner_join(i1_lb, by = c("prev", "b_int", "cmi"), suffix = c("(stratified)", "(risk adjusted)")) %>% 
+  pivot_longer(cols = contains("corrected"),
                names_to = "method",
                values_to = "auc_bias")
 
-i1_df_plot$method <- factor(i1_df_plot$method , levels=c("auc_corrected_bias.weighted_auc",
-                                                         "auc_uncorrected_bias.weighted_auc",
-                                                         "auc_corrected_bias.adjusted_risk",
-                                                         "auc_uncorrected_bias.adjusted_risk"))
 
+i1_df_plot$method <- factor(i1_df_plot$method , levels=c("corrected(stratified)",
+                                                         "uncorrected(stratified)",
+                                                         "corrected(risk adjusted)",
+                                                         "uncorrected(risk adjusted)"))
+
+# update facet label
+prev.labs <- c(prev[1], prev[2], prev[3])
+names(prev.labs) <- c(prevalence[1], prevalence[2], prevalence[3])
+```
+
+
+```{r fig.width = "100%", out.with = "100%"}
 i1_prev_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_bias)) +
   geom_boxplot() +
-  facet_grid(.~prev) +
+  facet_grid(.~prev,
+             labeller = labeller(prev = prev.labs)) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
-
 i1_prev_plot
+```
 
+
+```{r fig.width = "100%", out.with = "100%", fig.cap="AUC bias decrease (a) by prevalence; (b) by intervention effectiveness"}
 i1_int_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_bias)) +
   geom_boxplot() +
   facet_grid(.~b_int) +
@@ -307,6 +382,7 @@ i1_int_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_bias)) +
   labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
 
 i1_int_plot
+# cowplot::plot_grid(plotlist = c(i1_prev_plot, i1_int_plot), ncol = 1)
 ```
 
 ### 3.2 Point-of-care intervention
@@ -317,30 +393,45 @@ i1_int_plot
 
 ```{r}
 # intervention 2
-i2 <- read.csv("data/model_sum2_0306.csv")
-i2_lb <- read.csv("data/model_sum_lb2_0306.csv")
+i2 <- read.csv("data/model_sum2_0306.csv") %>% 
+  rename(
+    corrected = auc_corrected_bias,
+    uncorrected = auc_uncorrected_bias
+    )
+i2_lb <- read.csv("data/model_sum_lb2_0306.csv") %>% 
+  rename(
+    corrected = auc_corrected_bias,
+    uncorrected = auc_uncorrected_bias
+    )
 
 i2_df_plot <- i2 %>%
-  full_join(i2_lb, by = c("prev", "b_int"), suffix = c(".weighted_auc", ".adjusted_risk")) %>%
-  pivot_longer(cols = starts_with("auc"),
+  full_join(i2_lb, by = c("prev", "b_int"), suffix = c("(stratified)", "(risk adjusted)")) %>%
+  pivot_longer(cols = contains("corrected"),
                names_to = "method",
                values_to = "auc_bias")
 # i2_df_plot
 
-i2_df_plot$method <- factor(i2_df_plot$method , levels=c("auc_corrected_bias.weighted_auc",
-                                                         "auc_uncorrected_bias.weighted_auc",
-                                                         "auc_corrected_bias.adjusted_risk",
-                                                         "auc_uncorrected_bias.adjusted_risk"))
+i2_df_plot$method <- factor(i2_df_plot$method , levels=c("corrected(stratified)",
+                                                         "uncorrected(stratified)",
+                                                         "corrected(risk adjusted)",
+                                                         "uncorrected(risk adjusted)"))
+```
 
+
+```{r fig.width= "100%", out.with = "100%"}
 i2_prev_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_bias)) +
   geom_boxplot() +
-  facet_grid(.~prev) +
+  facet_grid(.~prev,
+             labeller = labeller(prev = prev.labs)) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
 
 i2_prev_plot
+```
 
+
+```{r fig.width= "300%", out.with = "100%", fig.cap="AUC bias decrease (a) by prevalence; (b) by intervention effectiveness"}
 i2_int_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_bias)) +
   geom_boxplot() +
   facet_grid(.~b_int) +
