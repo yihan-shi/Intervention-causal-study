@@ -43,3 +43,10 @@ foreach(p=1:3) %do% {
   AUC_list[[p]] <- AUC.grid
   MSE_list[[p]] <- MSE.grid
 }
+
+
+for (i in 1:3) {
+    for (j in 1:3){
+
+    }
+  }
