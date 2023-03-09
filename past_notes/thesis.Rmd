@@ -281,7 +281,7 @@ kable(
 ```
 
 
-## 2.2 Point-of-care intervention
+## 2.2 Causal diagram 2
 
 ```{r}
 gen_cmi_2 <- function(risk_t1, n = n, prevalence){
