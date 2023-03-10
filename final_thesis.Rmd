@@ -11,14 +11,15 @@ header-includes:
 fig_width: 10
 fig_height: 8
 bibliography: references.bib 
+geometry: left=0.8in, right=0.8in, top=0.7in, bottom=0.7in
 ---
 
 \vspace{-0.5 cm}
 
 ```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
-                      fig.align = 'center', fig.pos = "H", out.extra = '',
-                      out.width = "60%", cache = FALSE, eval = TRUE)
+                      fig.align = 'center', fig.pos = "H", out.extra = '', 
+                      cache = FALSE, eval = TRUE)
 ```
 
 ```{r}
@@ -41,6 +42,11 @@ library(predtools)
 library(boot)
 library(glmnet)
 ```
+
+## Abstract
+
+Clinical prediction models (CPMs) using electronic health records (EHRs) data has inaccurate capture of patient outcomes when medical intervention is present. We considered two intervention scenario implemented in medical services and illustrated the factors that influence the performance of CPMs: the effectiveness of intervention, the prevalence of disease, and the percentage of population receiving intervention. Then, we proposed 2 correction methods that improve CPM performance. Under a resource-constrained intervention scenario, stratified intervention approach is superior, especially when the disease is rare. Under a point-of-care intervention scenario, the adjusted posterior risk is superior, especially when the disease is common.
+
 
 ## 1. Introduction
 
@@ -321,7 +327,7 @@ In summary, it is clear that Confounding by Medical Interventions (CMIs) is a ch
 
 We will compare two possible approaches for handling data with CMIs when training a logistic regression model and evaluate their performance using simulated data. 40000 observations will be simulated, and model performance will be averaged over 100 repetitions. Two scenarios of intervention will be considered: resource-constrained intervention and point-of-care scenario. In each intervention scenario, we compare 2 approaches: 
 
-1) Stratified intervention approach
+### 3.1 Stratified intervention approach
 
 Simulated observations is divided into two groups: intervened (`cmi` = 1) and non-intervened (`cmi` = 0). In each group, a binary logistic regression model is fit on the final outcome using the knowledge of initial risk `risk_t1`.
 
@@ -333,15 +339,16 @@ The model performance (AUC) is calculated in each group and assigned a weight ba
 $AUC = \text{percentage of observations in intervention group} \times \text{AUC of intervention group} + \\ \text{percentage of observations in non-intervention group} \times \text{AUC of non-intervention group}$
 
 
-2) Adjusted posterior risk by estimating the effect of intervention
+### 3.2 Adjusted posterior risk by estimating the effect of intervention
 
 The simulated data is split into training (80%) and test (20%). A log-binomial regression model will be fit on the training data outcome using the knowledge of initial risk `risk_t1` and `cmi` such that $logit(Y) = \beta_0 + \beta_r \times risk_{t1} + \beta_{cmi} \times cmi$. The estimate of `cmi` ($\beta_{cmi}$) is considered to be a representation of the underlying effectiveness of treatment. Using this new information, we adjust the patients' initial risk if they have intervention (`cmi` = 1) by multiplying `risk_t1` with exp($\beta_{cmi}$). A new log-binomial regression model is fit on the same final outcome but using this adjusted risk such that $logit(Y) = \theta_0 + \theta_r \times risk_{adj}$. Then, we evaluate the new model using AUC metric.
 
 Finally, we compare how close the model AUC is to the ideal AUC score controlled at the start of simulation for each of the approaches. The difference between model AUC and ideal AUC is defined as AUC bias.
 
-### 3.1 Resource-constrained intervention
+### 3.3.1 Resource-constrained intervention results
 
-Under resource-constrained intervention, the stratified intervention approach achieves a slightly better mitigation of AUC bias at all levels of disease prevalence (Fig. 4a) and intervention effectiveness (Fig. 4b) , compared to adjusted posterior risk approach.
+Under resource-constrained intervention, the stratified intervention approach achieves slightly a better mitigation of AUC bias at all levels of disease prevalence (Fig. 4a). Both correction methods have better effect in reducing the bias when a disease occurs rarer in a population. The stratified intervention approach is also superior at all levels of intervention effectiveness (Fig. 4b). Both methods' ability to reduce AUC bias is consistent regardless of the intervention effectiveness.
+
 
 ```{r}
 # intervention 1
@@ -363,10 +370,12 @@ i1_df_plot <- i1 %>%
                values_to = "auc_bias") %>% 
   filter(method != "uncorrected(risk adjusted)") 
 i1_df_plot$method[i1_df_plot$method == "uncorrected(stratified)"] <- "uncorrected"
+i1_df_plot$method[i1_df_plot$method == "corrected(stratified)"] <- "stratified"
+i1_df_plot$method[i1_df_plot$method == "corrected(risk adjusted)"] <- "risk adjusted"
 
 i1_df_plot$method <- factor(i1_df_plot$method , levels=c("uncorrected",
-                                                         "corrected(stratified)",
-                                                         "corrected(risk adjusted)"
+                                                         "stratified",
+                                                         "risk adjusted"
                                                          ))
 
 # update facet label
@@ -375,9 +384,9 @@ names(prev.labs) <- c(prevalence[1], prevalence[2], prevalence[3])
 ```
 
 
-```{r fig.width = "100%", out.with = "100%"}
+```{r fig.width = "100%", out.width = "80%"}
 i1_prev_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_bias)) +
-  geom_boxplot() +
+  geom_boxplot(color="black", fill="#56B4E9", alpha=0.2) +
   facet_grid(.~prev,
              labeller = labeller(prev = prev.labs)) +
   theme_bw() +
@@ -387,21 +396,21 @@ i1_prev_plot
 ```
 
 
-```{r fig.width = "100%", out.with = "100%", fig.cap="Resource-constrained intervention: AUC bias decrease (a) by prevalence; (b) by intervention effectiveness"}
+```{r fig.width = "100%", out.width = "80%", fig.cap="Resource-constrained intervention: AUC bias decrease (a) by prevalence; (b) by intervention effectiveness"}
 i1_int_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_bias)) +
-  geom_boxplot() +
+  geom_boxplot(color="black", fill="#56B4E9", alpha=0.2) +
   facet_grid(.~b_int) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
+  labs(x = "Adjustment method", y = "AUC bias")
 
 i1_int_plot
 # cowplot::plot_grid(plotlist = c(i1_prev_plot, i1_int_plot), ncol = 1)
 ```
 
-### 3.2 Point-of-care intervention
+### 3.3.2 Point-of-care intervention results
 
-Under point-of-care intervention, the adjusted posterior risk approach achieves a slightly better mitigation of AUC bias at all levels of disease prevalence (Fig. 5a)  and intervention effectiveness (Fig. 5b), compared to stratified intervention approach.
+Under resource-constrained intervention, the adjusted posterior risk approach achieves a better mitigation of AUC bias at all levels of disease prevalence (Fig. 5a). In contrast to the first scenario (Fig. 4a), both correction methods have better effect in reducing the bias when a disease occurs more common in a population. The adjusted posterior risk approach is also superior at all levels of intervention effectiveness (Fig. 5b). Both methods' ability to reduce AUC bias is consistent regardless of the intervention effectiveness.
 
 ```{r}
 # intervention 2
@@ -424,30 +433,32 @@ i2_df_plot <- i2 %>%
   filter(method != "uncorrected(risk adjusted)") 
 
 i2_df_plot$method[i2_df_plot$method == "uncorrected(stratified)"] <- "uncorrected"
+i2_df_plot$method[i2_df_plot$method == "corrected(stratified)"] <- "stratified"
+i2_df_plot$method[i2_df_plot$method == "corrected(risk adjusted)"] <- "risk adjusted"
 
 i2_df_plot$method <- factor(i2_df_plot$method , levels=c("uncorrected",
-                                                         "corrected(stratified)",
-                                                         "corrected(risk adjusted)"
+                                                         "stratified",
+                                                         "risk adjusted"
                                                          ))
 ```
 
 
-```{r fig.width= "100%", out.with = "100%"}
+```{r fig.width= "100%", out.width = "80%"}
 i2_prev_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_bias)) +
-  geom_boxplot() +
+  geom_boxplot(color="black", fill="#56B4E9", alpha=0.2) +
   facet_grid(.~prev,
              labeller = labeller(prev = prev.labs)) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
+  labs(x = "Adjustment method", y = "AUC bias")
 
 i2_prev_plot
 ```
 
 
-```{r fig.width= "300%", out.with = "100%", fig.cap="Point-of-care intervention: AUC bias decrease (a) by prevalence; (b) by intervention effectiveness"}
+```{r fig.width= "100%", out.width = "80%", fig.cap="Point-of-care intervention: AUC bias decrease (a) by prevalence; (b) by intervention effectiveness"}
 i2_int_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_bias)) +
-  geom_boxplot() +
+  geom_boxplot(color="black", fill="#56B4E9", alpha=0.2) +
   facet_grid(.~b_int) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
@@ -456,6 +467,15 @@ i2_int_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_bias)) +
 i2_int_plot
 ```
 
-## 4. Conclusion
+## 4. Discussion
+
+In this study, we considered two intervention scenario implemented in medical services and illustrated the factors that influence the performance of CPMs: the effectiveness of intervention, the prevalence of disease, and the percentage of population receiving intervention. 
+
+Resource-constrained intervention scenario can often been seen on medical necessity guidelines published by hospitals [@NICE2018] and medical insurance companies[@Cigna2019]. There could be an explicit risk score such as the “CURB 65” score for community acquired pneumonia or a “Blatchford” score that calculates the risk of major Gastro-intestinal hemorrhage. This kind of intervention is more common for urgent or major illnesses that require standardized tools for aiding decisions. Predicting patient outcome without the knowledge of whether they have received intervention is generally more difficult when the disease is rare, intervention is effective, and when the intervention is given to all patients who are at least moderately risky to get the disease. In this case, the stratified intervention approach effectively reduced the model bias especially for disease with lower prevalence. By separating patients into those who have intervention and those who don't, we were able to obtain a more accurate estimate of each group.
+
+Because of its individualized, needs-based, and least-restrictive philosophy, point-of-care medical intervention is ideal and comprehensive model in medical care. It is appropriate when a disease is commonly seen in the population and medical resources are inexpensive. Predicting patient outcome without the knowledge of whether they have received intervention is generally more difficult when the disease is common and intervention is effective. The commonality of the disease increase the percentage of people who receive care. Along with strong intervention, many patients would have been cured already when their outcome is observed. While this flipped outcome reduce a CPM's performance, the adjusted-posterior-risk approach effectively reduced the model bias especially for disease with higher prevalence. Typically, a patient's clinic visit and medication is recorded in EHR data. Incorporating this knowledge of whether patients have received treatment to infer the underlying effectiveness of intervention is helpful as this piece of additional information help medical professionals adjust their evaluation of the patients' risk.
+
+[Limitation and future direction]
+
 
 ## Bibiliography
