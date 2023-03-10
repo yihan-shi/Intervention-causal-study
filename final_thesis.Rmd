@@ -398,7 +398,7 @@ i1_prev_plot <- ggplot(i1_df_plot, aes(x = method, y = auc_bias)) +
              labeller = labeller(prev = prev.labs)) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
+  labs(x = "Adjustment method", y = "AUC bias")
 i1_prev_plot
 ```
 
@@ -469,7 +469,7 @@ i2_int_plot <- ggplot(i2_df_plot, aes(x = method, y = auc_bias)) +
   facet_grid(.~b_int) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  labs(title = "AUC improvement", x = "Adjustment method", y = "AUC bias")
+  labs(x = "Adjustment method", y = "AUC bias")
 
 i2_int_plot
 ```
