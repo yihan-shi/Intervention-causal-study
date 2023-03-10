@@ -45,7 +45,7 @@ library(glmnet)
 
 ## Abstract
 
-Clinical prediction models (CPMs) using electronic health records (EHRs) data has inaccurate capture of patient outcomes when medical intervention is present. We considered two intervention scenario implemented in medical services and illustrated the factors that influence the performance of CPMs: the effectiveness of intervention, the prevalence of disease, and the percentage of population receiving intervention. Then, we proposed 2 correction methods that improve CPM performance. Under a resource-constrained intervention scenario, stratified intervention approach is superior, especially when the disease is rare. Under a point-of-care intervention scenario, the adjusted posterior risk is superior, especially when the disease is common.
+Clinical prediction models (CPMs) using electronic health records (EHRs) data capture patient outcomes inaccurately when medical intervention is present. We considered two intervention scenario implemented in medical services and illustrated the factors that influence the performance of CPMs: the effectiveness of intervention, the prevalence of disease, and the percentage of population receiving intervention. Then, we proposed two correction methods that improve CPM performance. Under a resource-constrained intervention scenario, stratified intervention approach is superior, especially when the disease is rare. Under a point-of-care intervention scenario, the adjusted posterior risk is superior, especially when the disease is common.
 
 
 ## 1. Introduction
@@ -54,30 +54,31 @@ Electronic health records (EHRs) data are widely used for clinical research. The
 
 After implementing a CPM, medical professionals will use these models to inform clinical decision-making and allocation of interventions. Ideally, the intervention will prevent the outcome that the CPM is predicting. This leads to an important challenge: how do we evaluate CPMs in the presence of interventions? If the CPM is accurate, and the intervention is effective, those who are truly at risk of the adverse outcome will not actually have the event. To evaluate the CPM appropriately, we are interested in what the causal inference refers to as the counterfactual: the outcome that would have occurred without the intervention being deployed. Unfortunately, we do not observe this counterfactual.
 
-Current research on EHR data has investigated several sources of biases such as selection bias informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled: Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professionals' judgment). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough [@Paxton2013]. In general, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and the strategies we can use to address these challenges. We first propose possible causal models. Next, we use simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
+Current research on EHR data has investigated several sources of biases such as selection bias, informed presence bias, and confounding, and proposed approaches to control these biases. However, little work has considered this potential bias which has been labeled Confounding by Medical Interventions (CMIs). The little literature on this topic has focused on how we can learn new CPMs in the presence of CMI. The suggestions to mitigate this bias include using data with no CMI for model training or treating all observations with CMI as unhealthy (based on the trust in medical professionals' judgment). Although the researchers were able to improve the classification accuracy using these methods, ignoring data with CMI during training reduced the generalizability of the model to validation data, and assigning all data with CMI with negative labels did not perform well enough [@Paxton2013]. In general, the literature is not well developed. This project seeks to study how CMI can impact our ability to evaluate CPMs and the strategies we can use to address these challenges. We first propose possible causal models. Next, we use simulation to both illustrate the problem and explore potential solutions. Then, we will evaluate these approaches in real-world healthcare data.
 
 ## 2. Simulationg of confounded EHR data
 
-During the initial stage of investigation, we proposed two possible causal models to illustrate and pinpoint the research problem. The variables included in the causal models are initial risk, intervention (`1` = intervention, `0` = no intervention), prevalence of disease, and the observed outcome (`1` = sick, `0` = healthy). In a simulated scenario, a patient with initial risk higher than the intervention cutoff (`cmi`) will receive intervention treatment. The effectiveness of treatment is decided by $\beta_{intervention}$. In general, a higher $\beta_{intervention}$ means lower effectiveness. New risk (risk after intervention) are calculated for patients who should have had outcome due to higher initial risk and also received intervention treatment. Depending on the treatment strength, the patient who would have been sick might end up become healthy. According to the new risk, the final observed outcome is generated probabilistically. The two causal models differ in their mechanisms of intervention. The first model is based on resource-constrained intervention. In this case, medical resource is limited so that only patients with high-enough initial risks are eligible to receive intervention. This standard is determined by a `cmi` cutoff on risk. The second model is based on point-of-care intervention. Medical resources is not limited, and rapid clinical decision are made in the process of diagnosis. We simulate medical professionals’ subjective decision process by setting the probability of receiving care as proportional to the diagnosed risk.
+During the initial stage of the investigation, we proposed two possible causal models to illustrate and pinpoint the research problem. The variables included in the causal models are initial risk, intervention (`1` = intervention, `0` = no intervention), the prevalence of disease, and the observed outcome (`1` = sick, `0` = healthy). In a simulated scenario, a patient will receive intervention treatment depending on their initial risk. The effectiveness of treatment is decided by $\beta_{intervention}$. In general, a higher $\beta_{intervention}$ means lower effectiveness. New risks (risk after intervention) are calculated for patients who should have had outcomes due to higher initial risk and also received intervention treatment. Depending on the treatment strength, the patient who would have been sick might end up becoming healthy. According to the new risk, the final observed outcome is generated probabilistically. 
+
+The two causal models differ in their mechanisms of intervention. The first model is based on resource-constrained intervention. In this case, the medical resource is limited so only patients with high-enough initial risks are eligible to receive the intervention. This standard is determined by a `cmi` cutoff on risk. The second model is based on point-of-care intervention. Medical resources are not limited, and rapid clinical decisions are made in the process of diagnosis. We simulate medical professionals’ subjective decision process by setting the probability of receiving care as proportional to the diagnosed risk.
 
 ![Causal diagram](diagrams/causal.png)
 
 We simulate three levels of disease prevalence rate: high (\~50% population have the illness without intervention), moderate (\~25% population have the illness without intervention), and low (\~6% population have the illness without intervention). A highly prevalent disease includes hypertension, a moderately prevalent disease includes Hepatitis B, and a low-prevalent disease includes Chronic obstructive pulmonary disease.
 
-In the real world, only the initial risk and observed outcome are known to health professionals. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcome directly from the known initial risk. We evaluate the models using area under the curve (AUC) based on fitted linear predictors and actual outcomes, as well as calibration slope. These metrics are averaged over 100 simulations, with each simulation of 20000 observations:
+In the real world, only the initial risk and observed outcome are known to health professionals. With the confounding intervention variable, we ideally want to achieve a prediction power as good as predicting outcomes directly from the known initial risk. We evaluate the models using the area under the curve (AUC) and calibration slope. These metrics are averaged over 100 simulations, with each simulation of 20000 observations:
 
 1.   n = 20000 observations are assigned an initial risk $risk_{t1}$ uniformly distributed from 0 to 1.
 
-2.   Observed outcome (Y) without intervention is determined by a binomial distribution as following:
-$x = prevalence + 5 \times risk_{t1}$ where the AUC is controlled at around 0.8. $p = \frac{e^x}{(1+e^x)}, \text{ so that } Y \sim binomial(n, p)$
+2.   Observed outcome (Y) without intervention is determined by a binomial distribution as following: $x = prevalence + c \times risk_{t1}$, where c is a constant to control AUC at around 0.8 (c = 5). $p = \frac{e^x}{(1+e^x)}, \text{ so that } Y \sim binomial(n, p)$
 
-3.   In case 1, intervention (`cmi`) is present when a patient has $risk_{t1}$ higher than a set `cmi_cutoff`. In case 2, intervention (`cmi`) is proportional to $risk_{t1} \text{ so that } cmi \sim binomial(n, p)$
+3.   In resource-constrained intervention, intervention (`cmi`) is present when a patient has $risk_{t1}$ higher than a set `cmi_cutoff`. In point-of-care intervention, intervention (`cmi`) is proportional to $risk_{t1} \text{ so that } cmi \sim binomial(n, p)$
 
 4.   $risk_{t2} = risk_{t1} \times \beta_{intervention}$ if a patient had an outcome and received treatment. Otherwise, $risk_{t2}$ remains the same as $risk_{t1}$.
 
-5.   For patients who had an outcome and received treatment, their observed outcome (with intervention) is re-generated. Say there are m patients like this, then $Y \sim binomial(m, risk_{t2})$, while the outcomes of the rest remain to be their outcomes without intervention.
+5.   For patients who had an outcome and received treatment, their observed outcome (with intervention) is re-generated in the same way in step 2, while the outcomes of the rest remain to be their outcomes without intervention.
 
-A simulated EHR dataset with 20000 patients is generated. the data is split into training (80%) and test (20%). A binary logistic regression model is fit on training data such that $logit(Y) = \beta_0 + \beta_r \times risk_{t1}$. AUC is calculated using the probability of predicted outcome and true outcome from test set. To calculate the calibration slope, the true outcome from test set is regressed on the linear combination of predicted outcome using a binary logistic regression model such that $logit(y) = \gamma_0 + \gamma_p \times \hat y$ where y is the true outcome and $\hat y$ is the linear predictor using the original coefficients $\mathbf {\beta}$. $\gamma_p$ is the calibration slope.
+We generate simulated EHR datasets with 20000 patients repeatedly. In each iteration, the data is split into training (80%) and testing (20%). A binary logistic regression model is fit on training data such that $logit(Y) = \beta_0 + \beta_r \times risk_{t1}$. AUC is calculated using the probability of the predicted outcome and true outcome from the test set. To calculate the calibration slope, the true outcome from the test set is regressed on the linear combination of predicted outcome using a binary logistic regression model such that $logit(y) = \gamma_0 + \gamma_p \times \hat y$ where $y$ is the true outcome and $\hat y$ is the linear predictor using the original coefficients $\mathbf {\beta}$. $\gamma_p$ is the calibration slope.
 
 ```{r}
 set.seed(10)
@@ -98,7 +99,7 @@ prev <- c("low (6%)", "mid (25%)", "high (50%)")
 
 ### 2.1 Resource-constrained intervention
 
-#### 2.1.1 Model evalucation under varying intervention effectiveness $\beta_{intervention}$ and bar of intervention `cmi_cutoff`
+#### 2.1.1 Model evalucation under varying intervention effectiveness $\beta_{intervention}$ and `cmi_cutoff`
 
 ```{r}
 cmi <- seq(0.1, 1, length.out=10)
@@ -173,13 +174,14 @@ cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
 
 
-Under resource-constrained intervention scenario, the model performance is highly influenced by the effectiveness of intervention $\beta_{intervention}$ as well as the criteria of intervention `cmi_cutoff`. For diseases that are moderately or highly prevalent, less effective intervention is associated with higher AUC hence better predictive performance. This is intuitive because the power of confounding decreases as the intervention becomes weaker, and the predicted outcomes are closer to the ones under direct causal relationship between initial risk and outcome. Because AUC is a rank measure of the probability of a healthy person being ranked more highly than a sick person or vice versa, making half of the population (`cmi` = 0.5) receive treatment presents the worst predictive performance at the same intervention levels. For rarer diseases, the influence of intervention effectiveness is not obvious, possibly due to the lack of disease incidents to begin with. Nonetheless, when the intervention is not effective at all, all models under 3 prevalence scenarios achieved the nearly ideal AUC score controlled at the start of simulation.
+Under resource-constrained intervention scenario, the model performance is highly influenced by the effectiveness of intervention $\beta_{intervention}$ as well as the criteria of intervention `cmi_cutoff`. For diseases that are moderately or highly prevalent, less effective intervention is associated with higher AUC hence better predictive performance. This is intuitive because the power of confounding decreases as the intervention becomes weaker, and the predicted outcomes are closer to the ones under direct causal relationship between initial risk and outcome. Because AUC is a rank measure of the probability of a healthy person being ranked more highly than a sick person or vice versa, making half of the population (`cmi` = 0.5) receive treatment presents the worst predictive performance at fixed intervention levels. For rarer diseases, the influence of intervention effectiveness is not obvious in Fig. 2, possibly due to the lack of disease incidents to begin with. Nonetheless, when the intervention is not effective at all, all models under 3 prevalence scenarios achieved the nearly ideal AUC score controlled at the start of simulation.
 
-Calibration slope of 1 is a perfectly calibrated model (no under- or over- estimation). Less than 1 (pink) means overestimating for patients at high risk, while larger than 1 (blue) means underestimating for patients at low risk. Overall, more prevalence disease has better calibration. For the rarer disease with 6% occurrence rate, there is a trend of underestimating initial risk when most patients get intervention (`cmi_cutoff` = 0.1). For more prevalent diseases, the more effective intervention is, the worse the calibration is.
+Calibration slope of 1 is a perfectly calibrated model (no under- or over- estimation). Less than 1 (pink) means overestimating for patients at high risk, while larger than 1 (blue) means underestimating for patients at low risk. Overall, more prevalent disease has better calibration. For the rarer disease with 6% occurrence rate, there is a trend of underestimating initial risk when most patients get intervention (`cmi_cutoff` = 0.1). For more prevalent diseases, the more effective intervention is, the worse the calibration is.
 
 ### 2.1.2 Influential variables on model performance
 
 To quantify the impact of 1) the criteria of intervention, 2) intervention effectiveness, and 3) prevalence on model performance, we regress $\beta_{intervention}$, `cmi_cutoff`, and prevalence on AUC. 
+
 $$
 \text{AUC} = \beta_0 + \beta_1 \times \text{cmi cutoff} + \beta_2 \times \text{cmi cutoff}^{2} + \beta_{intervention} \times \text{intervention effectiveness} + \beta_3 \times \text{prevalence}
 $$
@@ -214,7 +216,7 @@ rownames(summ_final) <- c("Intercept","cmi cutoff","(cmi cutoff)^2","interventio
 
 ```
 
-The model output (Table 1) matches our previous observations. The less effective an intervention is, the higher AUC is. Compared to low prevalence disease (baseline), moderately and highly prevalent disease both have higher overall AUC. For a scenario in which the intervention cutoff is at $risk_{t1} = 0.1$, requiring patients to have an initial risk 10% higher to receive intervention is associated with an AUC change of `r -1.084 + 2 * 1.061 * 0.1`. Under intervention cutoff at $risk_{t1} = 0.5$, the AUC change is `r -1.084 + 2 * 1.061 * 0.5`. Under intervention cutoff at $risk_{t1} = 0.9$, the AUC change is `r -1.084 + 2 * 1.061 * 0.9`. In other words, under a strict intervention criteria, raising the bar for intervention is associated with improved model performance, but model performance becomes worse when the bar is raised under a relaxed intervention criteria.
+The model output (Table 1) matches our previous observations. The less effective an intervention is, the higher AUC is. Compared to low prevalence disease (baseline), moderately and highly prevalent diseases both have higher overall AUC. For a scenario in which the intervention cutoff is at $risk_{t1} = 0.1$, requiring patients to have an initial risk 10% higher to receive intervention is associated with an AUC change of `r -1.084 + 2 * 1.061 * 0.1`. Under intervention cutoff at $risk_{t1} = 0.5$, the AUC change is `r -1.084 + 2 * 1.061 * 0.5`. Under intervention cutoff at $risk_{t1} = 0.9$, the AUC change is `r -1.084 + 2 * 1.061 * 0.9`. In other words, under strict intervention criteria, raising the bar for intervention is associated with improved model performance, but model performance becomes worse when the bar is raised under relaxed intervention criteria.
 
 ```{r}
 kable(
@@ -271,13 +273,14 @@ for (p in 1:3){
 }
 ```
 
-Under point-of-care intervention scenario, there is no strict criteria of intervention. Rather, patients at higher risk are more likely to receive intervention. The results are similar to the first scenario. The model performance is highly influenced by the effectiveness of intervention $\beta_{intervention}$ as well as disease prevalence. For diseases that are moderately or highly prevalent, less effective intervention is associated with higher AUC hence better predictive performance. For rarer diseases, the influence of intervention effectiveness is not obvious. Different from the first scenario, model achieves near perfect AUC only in the rare disease case. In general, there is little under- or over- estimation. 
+Under the point-of-care intervention scenario, there are no strict criteria for intervention. Rather, patients at higher risk are more likely to receive the intervention. The results are similar to the first scenario. The model performance is highly influenced by the effectiveness of intervention $\beta_{intervention}$ as well as disease prevalence. For diseases that are moderately or highly prevalent, less effective intervention is associated with higher AUC hence better predictive performance. For rarer diseases, the influence of intervention effectiveness is not obvious. Different from the first scenario, the model achieves near-perfect AUC only in the rare disease case. In general, there is little under- or over- estimation. 
 
 ### 2.2.2 Influential variables on model performance
 
 To quantify the impact of 1) intervention effectiveness, and 2) prevalence on model performance, we regress $\beta_{intervention}$ and and prevalence on AUC. 
+
 $$
-\text{AUC} = \beta_0 + \beta_1 \times \text{b$_{intervention}$} + \beta_3 \times \text{prevalence}
+\text{AUC} = \beta_0 + \beta_1 \times \text{b$_{intervention}$} + \beta_2 \times \text{prevalence}
 $$
 
 ```{r}
@@ -310,7 +313,7 @@ summ2_final <- summ2_final %>%
 rownames(summ2_final) <- c("Intercept","intervention effectiveness", "prevalence (mid vs. low)", "prevalence (high vs. low)")
 ```
 
-Consistent with the first scenario, the less effective an intervention is, the higher AUC is. However, disease prevalence has a different impact on AUC from the first scenario. Moderately and highly prevalent disease both have lower overall AUC compared to rare disease (baseline), which matches the simulation outcomes in Fig. 3.
+Consistent with the first scenario, the less effective an intervention is, the higher AUC is. However, disease prevalence has a different impact on AUC from the first scenario. CPM for moderately and highly prevalent diseases both have lower overall AUC compared to rare diseases (baseline), which matches the simulation outcomes in Fig. 3.
 
 ```{r}
 kable(
@@ -321,7 +324,7 @@ kable(
 ```
 
 
-In summary, it is clear that Confounding by Medical Interventions (CMIs) is a challenge to effective prediction of clinical models under many scenarios. First, the criteria of intervention directly affects the percentage of population who receives treatment. The clinical model works the best when this percentage is very large or very small. Second, the more effective intervention is, the weaker the ability of our classifier is to distinguish between healthy and sick subjects. The prevalence of disease also affect our overall confidence in predictions. After illustrating the research question by simulating health risks under two scenarios of intervention, we propose two potential solutions.
+In summary, Confounding by Medical Interventions (CMIs) is a challenge to the effective prediction of clinical models under many scenarios. First, the criteria of intervention directly affect the percentage of the population who receives treatment. The clinical model works best when this percentage is very large or very small in a resource-constrained intervention scenario. Second, the more effective intervention is, the weaker the ability of our classifier is to distinguish between healthy and sick subjects. The prevalence of disease also affects our overall confidence in predictions. After illustrating the research question by simulating health risks under two scenarios of intervention, we propose two potential solutions.
 
 ## 3. Developing predticive models with knowledge of confounding
 
@@ -329,25 +332,29 @@ We will compare two possible approaches for handling data with CMIs when trainin
 
 ### 3.1 Stratified intervention approach
 
-Simulated observations is divided into two groups: intervened (`cmi` = 1) and non-intervened (`cmi` = 0). In each group, a binary logistic regression model is fit on the final outcome using the knowledge of initial risk `risk_t1`.
+Simulated observations are divided into two groups: intervened (`cmi` = 1) and non-intervened (`cmi` = 0). In each group, a binary logistic regression model is fit on the final outcome using the knowledge of initial risk `risk_t1`.
 
 1. `cmi` = 1: $logit(Y) = \beta_{0} + \beta_{r} \times risk_{t1} + \beta_{cmi} \times cmi$
 2. `cmi` = 0: $logit(Y) = \theta_{0} + \theta_{r} \times risk_{t1} + \theta_{cmi} \times cmi$
 
 The model performance (AUC) is calculated in each group and assigned a weight based on the number of observations in this group over the total observations. The final AUC is the weighted average over two groups.
 
-$AUC = \text{percentage of observations in intervention group} \times \text{AUC of intervention group} + \\ \text{percentage of observations in non-intervention group} \times \text{AUC of non-intervention group}$
+$\text{Weighed AUC} = \text{percentage of observations in intervention group} \times \text{AUC of intervention group} + \\ \text{percentage of observations in non-intervention group} \times \text{AUC of non-intervention group}$
 
 
 ### 3.2 Adjusted posterior risk by estimating the effect of intervention
 
-The simulated data is split into training (80%) and test (20%). A log-binomial regression model will be fit on the training data outcome using the knowledge of initial risk `risk_t1` and `cmi` such that $logit(Y) = \beta_0 + \beta_r \times risk_{t1} + \beta_{cmi} \times cmi$. The estimate of `cmi` ($\beta_{cmi}$) is considered to be a representation of the underlying effectiveness of treatment. Using this new information, we adjust the patients' initial risk if they have intervention (`cmi` = 1) by multiplying `risk_t1` with exp($\beta_{cmi}$). A new log-binomial regression model is fit on the same final outcome but using this adjusted risk such that $logit(Y) = \theta_0 + \theta_r \times risk_{adj}$. Then, we evaluate the new model using AUC metric.
+The simulated data is split into training (80%) and test (20%). A log-binomial regression model will be fit on the training data outcome using the knowledge of initial risk $risk_{t1}$ and `cmi` such that 
+$$logit(Y) = \beta_0 + \beta_r \times risk_{t1} + \beta_{cmi} \times cmi$$
+The estimate of `cmi` ($\beta_{cmi}$) is considered to be a representation of the underlying effectiveness of treatment. Using this new information, we adjust the patients' initial risk if they have intervention (`cmi` = 1) by multiplying $risk_{t1}$ with $e^{\beta_{cmi}}$). A new log-binomial regression model is fit on the same final outcome but using this adjusted risk such that 
+$$logit(Y) = \theta_0 + \theta_r \times risk_{adj}$$
+Then, we evaluate the new model using AUC metric.
 
 Finally, we compare how close the model AUC is to the ideal AUC score controlled at the start of simulation for each of the approaches. The difference between model AUC and ideal AUC is defined as AUC bias.
 
 ### 3.3.1 Resource-constrained intervention results
 
-Under resource-constrained intervention, the stratified intervention approach achieves slightly a better mitigation of AUC bias at all levels of disease prevalence (Fig. 4a). Both correction methods have better effect in reducing the bias when a disease occurs rarer in a population. The stratified intervention approach is also superior at all levels of intervention effectiveness (Fig. 4b). Both methods' ability to reduce AUC bias is consistent regardless of the intervention effectiveness.
+Under resource-constrained intervention, the stratified intervention approach achieves a slightly better mitigation of AUC bias at all levels of disease prevalence (Fig. 4a). Both correction methods have a better effect in reducing the bias when a disease occurs rarer in a population. The stratified intervention approach is also superior at all levels of intervention effectiveness (Fig. 4b). Both methods' ability to reduce AUC bias is consistent regardless of the intervention effectiveness.
 
 
 ```{r}
@@ -410,7 +417,7 @@ i1_int_plot
 
 ### 3.3.2 Point-of-care intervention results
 
-Under resource-constrained intervention, the adjusted posterior risk approach achieves a better mitigation of AUC bias at all levels of disease prevalence (Fig. 5a). In contrast to the first scenario (Fig. 4a), both correction methods have better effect in reducing the bias when a disease occurs more common in a population. The adjusted posterior risk approach is also superior at all levels of intervention effectiveness (Fig. 5b). Both methods' ability to reduce AUC bias is consistent regardless of the intervention effectiveness.
+Under resource-constrained intervention, the adjusted posterior risk approach achieves better mitigation of AUC bias at all levels of disease prevalence (Fig. 5a). In contrast to the first scenario (Fig. 4a), both correction methods have a better effect in reducing the bias when a disease occurs more often in a population. The adjusted posterior risk approach is also superior at all levels of intervention effectiveness (Fig. 5b). Both methods' ability to reduce AUC bias is consistent regardless of the intervention effectiveness.
 
 ```{r}
 # intervention 2
@@ -469,11 +476,11 @@ i2_int_plot
 
 ## 4. Discussion
 
-In this study, we considered two intervention scenario implemented in medical services and illustrated the factors that influence the performance of CPMs: the effectiveness of intervention, the prevalence of disease, and the percentage of population receiving intervention. 
+In this study, we considered two intervention scenarios implemented in medical services and illustrated the factors that influence the performance of CPMs: the effectiveness of the intervention, the prevalence of disease, and the percentage of the population receiving the intervention. 
 
-Resource-constrained intervention scenario can often been seen on medical necessity guidelines published by hospitals [@NICE2018] and medical insurance companies[@Cigna2019]. There could be an explicit risk score such as the “CURB 65” score for community acquired pneumonia or a “Blatchford” score that calculates the risk of major Gastro-intestinal hemorrhage. This kind of intervention is more common for urgent or major illnesses that require standardized tools for aiding decisions. Predicting patient outcome without the knowledge of whether they have received intervention is generally more difficult when the disease is rare, intervention is effective, and when the intervention is given to all patients who are at least moderately risky to get the disease. In this case, the stratified intervention approach effectively reduced the model bias especially for disease with lower prevalence. By separating patients into those who have intervention and those who don't, we were able to obtain a more accurate estimate of each group.
+Resource-constrained intervention scenarios can often be seen in medical admission guidelines published by hospitals [@NICE2018] and medical insurance companies[@Cigna2019]. There could be an explicit risk score such as the “CURB 65” score for community-acquired pneumonia or a “Blatchford” score that calculates the risk of major Gastrointestinal hemorrhage. This kind of intervention is more common for urgent or major illnesses that require standardized tools for aiding decisions. Predicting patient outcomes without the knowledge of whether they have received intervention is generally more difficult when the disease is rare, intervention is effective, and when intervention is given to all patients who are at least moderately risky to get the disease. In this case, the stratified intervention approach effectively reduced the model bias, especially for diseases with lower prevalence. By separating patients into those who have intervention and those who don't, we were able to obtain a more accurate estimate within each group.
 
-Because of its individualized, needs-based, and least-restrictive philosophy, point-of-care medical intervention is ideal and comprehensive model in medical care. It is appropriate when a disease is commonly seen in the population and medical resources are inexpensive. Predicting patient outcome without the knowledge of whether they have received intervention is generally more difficult when the disease is common and intervention is effective. The commonality of the disease increase the percentage of people who receive care. Along with strong intervention, many patients would have been cured already when their outcome is observed. While this flipped outcome reduce a CPM's performance, the adjusted-posterior-risk approach effectively reduced the model bias especially for disease with higher prevalence. Typically, a patient's clinic visit and medication is recorded in EHR data. Incorporating this knowledge of whether patients have received treatment to infer the underlying effectiveness of intervention is helpful as this piece of additional information help medical professionals adjust their evaluation of the patients' risk.
+Because of its individualized, needs-based, and least-restrictive philosophy, point-of-care medical intervention is an ideal and comprehensive model of medical care. It is appropriate when a disease is commonly seen in the population and medical resources are inexpensive. Predicting patient outcomes without the knowledge of whether they have received intervention is generally more difficult when the disease is common and intervention is effective. The commonality of the disease increases the percentage of people who receive care. Along with strong intervention, many patients would have been cured already when their outcome is observed. While this flipped outcome reduces a CPM's performance, the adjusted-posterior-risk approach effectively reduced the model bias, especially for diseases with higher prevalence. Typically, a patient's clinic visit and medication are recorded in EHR data. Incorporating this knowledge of whether patients have received treatment to infer the underlying effectiveness of the intervention is helpful as this piece of additional information helps medical professionals adjust their evaluation of the patient's risk.
 
 [Limitation and future direction]
 
