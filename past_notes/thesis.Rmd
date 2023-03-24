@@ -73,7 +73,7 @@ $x = prevalence + 5 \times risk_{t1}$ where the AUC is controlled at around 0.8 
 set.seed(10)
 n <- 20000
 repeats <- 100 # for simulation
-# repeats <- 5
+# repeats <- 3
 
 # generate risk_t1
 risk_t1 <- runif(n, 0, 1)
@@ -284,10 +284,11 @@ kable(
 ## 2.2 Causal diagram 2
 
 ```{r}
-gen_cmi_2 <- function(risk_t1, n = n, prevalence){
+gen_cmi_2 <- function(risk_t1, n = n, prevalence, cmi_fraction){
   df <- gen_outcome1(risk_t1, n, prevalence)
 
-  xb <- prevalence + 5 * risk_t1
+  # xb <- prevalence + 5 * risk_t1 # 5 is a tuning parameter: degree of connection between risk and cmi; 0: not dependent on risk_t1
+  xb <- prevalence + cmi_fraction * risk_t1 
   p <- exp(xb)/(1 + exp(xb))
 
   df <- df %>%
@@ -296,9 +297,12 @@ gen_cmi_2 <- function(risk_t1, n = n, prevalence){
   return (df)
 }
 
-gen_risk_t2_2 <- function(risk_t1, n = n, b_intervention, prevalence){
+# df <- gen_cmi_2(risk_t1, n, prevalence[1], 100)
+# mean(df$cmi)
+
+gen_risk_t2_2 <- function(risk_t1, n = n, b_intervention, prevalence, cmi_fraction){
   # if cmi == 1 & outcome_noint == 1, then risk_t2 = risk_t1 * b_intervention
-  df <- gen_cmi_2(risk_t1, n, prevalence)
+  df <- gen_cmi_2(risk_t1, n, prevalence, cmi_fraction)
   df <- df %>%
     mutate(risk_t2 = ifelse((outcome_noint == 1 & cmi == 1),
                             risk_t1 * b_intervention,
@@ -306,8 +310,8 @@ gen_risk_t2_2 <- function(risk_t1, n = n, b_intervention, prevalence){
   return (df)
 }
 
-gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,prevalence){
-  df <- gen_risk_t2_2(risk_t1, n, b_intervention, prevalence)
+gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,prevalence, cmi_fraction){
+  df <- gen_risk_t2_2(risk_t1, n, b_intervention, prevalence, cmi_fraction)
   condition <- df %>%
     filter(outcome_noint == 1 & cmi == 1)
 
@@ -323,42 +327,52 @@ gen_outcome_f2 <- function(risk_t1, n = n, b_intervention,prevalence){
 
   return (df_final)
 }
+
+# df <- gen_outcome_f2(risk_t1, n, 0.1, prevalence[1], 100)
 ```
 
 #### 2.2.1 Model evalucation under varying effectiveness of treatment $\beta_{intervention}$
 
 ```{r cache=TRUE}
 b_int <- seq(0.1, 0.9, length.out=9)
+cmi_fraction <- seq(1, 12, length.out=9)
+cmi_fractionpop <- matrix(NA, 3, 9) # calculate real cmi fraction in population
+
+for (p in 1:3){
+  for (j in 1:9){
+      c <- as.data.frame(gen_outcome_f2(risk_t1,
+                         n,
+                         b_intervention = i/10,
+                         prevalence = prevalence[p],
+                         cmi_fraction = cmi_fraction[j]))
+      cmi_fractionpop[p,j] <- mean(c$cmi)
+  }
+}
+saveRDS(cmi_fractionpop, "../data/causal2_cmi_fractionpop", compress = "gzip")
 
 auc_list <- list()
-calibrationg_list <- list()
-cmi_perclist <- list()
-ideal_auc <- c(NA,3)
+calibration_list <- list()
 
-# counter <- 0
-for (p in 1:3){
-  AUC.vec <- rep(NA, 9)
-  cmi.vec <- rep(NA, 9)
-  calibration.vec <- rep(NA, 9)
+counter <- 0
+for (p in 1:3) {
   new_repeats <- repeats
 
+  auc_table <- matrix(NA, nrow = length(b_int), ncol = length(cmi_fraction))
+  calibration_table <- matrix(NA, nrow = length(b_int), ncol = length(cmi_fraction))
+
   for (i in 1:9){
+    for (j in 1:9){
       cur_auc <- 0
       cur_calibration <- 0
-      perc_cmi <- 0
-
       for (k in 1:repeats){
-        # counter <- counter + 1
-        # if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         c <- as.data.frame(gen_outcome_f2(risk_t1,
                                        n,
                                        b_intervention = i/10,
-                                       prevalence = prevalence[p]))
+                                       prevalence = prevalence[p],
+                                       cmi_fraction = cmi_fraction[j]))
 
-        perc_cmi = perc_cmi + mean(c$cmi)
-
-        ideal_auc[p] <- auc(c$outcome_noint, c$risk_t1)
-
+        counter <- counter + 1
+        if (counter %% 500 == 0){print(paste0("number:", counter, " p:", p, " i:", i, " j:", j))}
         x <- c %>%
           select(-outcome_int)
         y <- c %>%
@@ -377,9 +391,11 @@ for (p in 1:3){
           fit <- glm(y.train ~ risk_t1, data = x.train, family = binomial,  maxit = 100)
           y.pred_a <- predict(fit, as.data.frame(x.test), type = "response")
           y.pred_c <- predict(fit, as.data.frame(x.test))
+          # fit_all <- glm(c$outcome_int ~ risk_t1, data = c, family = binomial)
 
           calibration_fit <- glm(y.test ~ y.pred_c, family = binomial, data =
                                    as.data.frame(x.test))
+          # summary(calibration_fit)
 
           cur_auc = cur_auc + auc(y.test, y.pred_a)
           cur_calibration = cur_calibration + calibration_fit$coefficients[2]
@@ -388,60 +404,56 @@ for (p in 1:3){
         else { # skip those with only 1 level of outcome
           new_repeats = new_repeats - 1
         }
-        # counter <- counter + 1
       }
-      cmi.vec[i] <- perc_cmi/new_repeats
-      AUC.vec[i] <- cur_auc/new_repeats
-      calibration.vec[i] <- cur_calibration/new_repeats
+      auc_table[i,j] <- cur_auc/new_repeats
+      calibration_table[i,j] <- cur_calibration/new_repeats
     }
-  auc_list[[p]] <- AUC.vec
-  calibrationg_list[[p]] <- calibration.vec
-  cmi_perclist[[p]] <- cmi.vec
+  }
+    auc_list[[p]] <- auc_table
+    calibration_list[[p]] <- calibration_table
 }
 
 # save objects
-saveRDS(ideal_auc, "causal2_ideal_auc", compress = "gzip")
-saveRDS(cmi_perclist, "causal2_cmi_perc_eval", compress = "gzip")
-saveRDS(auc_list, "causal2_auc_eval", compress = "gzip")
-saveRDS(calibrationg_list, "causal2_calibration_eval", compress = "gzip")
+# saveRDS(ideal_auc, "../data/causal2_ideal_auc", compress = "gzip")
+# saveRDS(cmi_perclist, "causal2_cmi_perc_eval", compress = "gzip")
+saveRDS(auc_list, "../data/causal2_auc_eval", compress = "gzip")
+saveRDS(calibration_list, "../data/causal2_calibration_eval", compress = "gzip")
 
 # plot
-
-par(mfrow = c(2, 3))
+auc_heatmap <- list()
 for (p in 1:3){
-  plot(auc_list[[p]] ~ b_int,
-       xlab="intervention effectiveness (b_int)",
-       xlim = rev(range(b_int)),
-       ylim = c(0.45, 1),
-       ylab = "AUC",
-       type = "b", sub = paste0("prevalence: ",
-                                prev[p], "; % intervention: ",
-                                round(mean(cmi_perclist[[p]]),2))
-  )
-  axis(side=1, at=10:1, labels = seq(1, 0.1, -0.1), tick = TRUE)
-  abline(h = ideal_auc[p], col = "red")
+  data_auc <- expand.grid(X=cmi_fractionpop[p, 1:9], Y=b_int)
+  auc_heatmap[[p]] <- levelplot(t(auc_list[[p]]) ~ Y*X, data=data_auc,
+                        main="AUROC",
+                        xlab="intervention effectiveness (b_int)",
+                        ylab="intervention fraction (cmi)",
+                        xlim = c(0.9, 0.1),
+                        ylim = c(max(data_auc$X),min(data_auc$X)),
+                        col.regions = rev(heat.colors(1000)),
+                        at=seq(0.45, 1, length.out=1000),
+                        sub = paste0(" prevalence = ", prev[p]))
 }
+cowplot::plot_grid(plotlist = auc_heatmap, ncol = 2)
 
-
-par(mfrow = c(2, 3))
+calibration_heatmap <- list()
 for (p in 1:3){
-  plot(calibrationg_list[[p]] ~ b_int,
-       xlab = "b_intervention",
-       xlim = rev(range(b_int)),
-       ylab = "Calibration slope", ylim = c(0.8, 1.2),
-       type = "b", sub = paste0("prevalence: ",
-                                prev[p], "; % intervention: ",
-                                round(mean(cmi_perclist[[p]]),2))
-       )
-  axis(side=1, at=10:1, labels = seq(1, 0.1, -0.1), tick = TRUE)
-  abline(h = 1, col = "red")
+  data_calibration <- expand.grid(X=cmi_fractionpop[p, 1:9], Y=b_int)
+  calibration_heatmap[[p]] <- levelplot(t(calibration_list[[p]]) ~ Y*X, data=data_calibration,
+                        main="Calibration slope",
+                        xlab="intervention effectiveness (b_int)",
+                        ylab="intervention fraction (cmi)",
+                        xlim = c(1,0),
+                        ylim = c(max(data_calibration$X),min(data_calibration$X)),
+                        col.regions = rev(cm.colors(1000)),
+                        at=seq(0.8, 1.2, length.out=1000),
+                        sub = paste0(" prevalence = ", prev[p]))
 }
+cowplot::plot_grid(plotlist = calibration_heatmap, ncol = 2)
 ```
 
 #### 2.2.2 Influential variables on model performance
 
 $$\text{area under the curve} = \beta_0 + \beta_1 \times \text{b_intervention} + \beta_3 \times \text{prevalence}$$
-
 ```{r}
 df <- data.frame(matrix(NA, nrow = 0, ncol = 3))
 names <- c("b_intervention", "prevalence", "AUC")
@@ -449,10 +461,10 @@ colnames(df) <- names
 
 b_int <- seq(0.1,0.9,0.1)
 prev <- prevalence
-var <- list(b_intervention = b_int, prevalence = prev)
+var <- list(b_intervention = b_int, cmi_fraction = cmi_fraction, prevalence = prev)
 df <- expand.grid(var)
 df$auc <- unlist(auc_list)
-df$calibration <- unlist(calibrationg_list)
+
 
 # fit logistic regression
 fit2 <- lm(auc ~ b_intervention + as.factor(prevalence), data = df)
@@ -544,14 +556,7 @@ for (row in 1:dim(model_sum_lb)[1]){
     x.test <- x[test,]
     y.test <- y[test,]
 
-    # original auc
-    fit <- glm(y.train ~ risk_t1, data = x.train, family = poisson())
-
-    x.test_1 <- x.test %>%
-      select(risk_t1)
-    y.pred_resp <- predict.glm(fit, x.test_1, type = "response")
-    
-    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(y.test, y.pred_resp)) # old bias
+    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(y.test, x.test$risk_t1)) # old bias
 
     # fit model with new information: CMI
     fit_lb <- glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = poisson())
@@ -559,28 +564,28 @@ for (row in 1:dim(model_sum_lb)[1]){
     # deterministically can't compare cmi at fixed level of risk_t1, problematic method bc need to supply start value
 
     # for the patients with observation, use exp(\beta_{i}) to adjust their risk
-    x.train_2 <- x.train %>%
-      mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb)[3]),
-                               risk_t1))
+    # x.train_2 <- x.train %>%
+    #   mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb)[3]),
+    #                            risk_t1))
     x.test_2 <- x.test %>%
       mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb)[3]),
                                risk_t1))
 
-    fit_lb2 <- glm(y.train ~ new_risk, data = x.train_2, family = poisson())
-
+    # fit_lb2 <- glm(y.train ~ new_risk, data = x.train_2, family = poisson())
 
     # use new_risk to fit model
-    x.test_2 <- x.test_2 %>%
-      select(new_risk)
-    y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
-     auc_corrected_bias =  auc_corrected_bias + (ideal_auc - auc(y.test, y.pred_resp_2)) # new bias
+    # x.test_2 <- x.test_2 %>%
+    #   select(new_risk)
+    # y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
+    # auc_corrected_bias =  auc_corrected_bias + (ideal_auc - auc(y.test, y.pred_resp_2)) # new bias
+    auc_corrected_bias =  auc_corrected_bias + (ideal_auc - auc(y.test, x.test_2$new_risk)) # new bias
      
   }
   model_sum_lb$auc_corrected_bias[row] <- auc_corrected_bias/repeats
   model_sum_lb$auc_uncorrected_bias[row] <- auc_uncorrected_bias/repeats
 }
 
-write_csv(model_sum_lb, "model_sum_lb_0306.csv")
+# write_csv(model_sum_lb, "model_sum_lb_0306.csv")
 ```
 
 #### 3.1.2 Stratified intervention approach
@@ -610,45 +615,23 @@ for (row in 1:dim(model_sum)[1]){
     
     ideal_auc <- auc(df$outcome_noint, df$risk_t1)
 
-    fit <- glm(outcome_int ~ risk_t1 , data = df, family = binomial)
-    y.pred <- predict(fit, as.data.frame(df), type = "response")
-
     have_cmi <- df %>%
       filter(cmi == 1)
     no_cmi <- df %>%
       filter(cmi == 0)
-
-    fit_cmi <- glm(outcome_int ~ risk_t1, data = have_cmi, family = binomial)
-    y.pred_cmi <- predict(fit_cmi, as.data.frame(have_cmi), type = "response")
-    fit_no_cmi <- glm(outcome_int ~ risk_t1, data = no_cmi, family = binomial)
-    y.pred_no_cmi <- predict(fit_no_cmi, as.data.frame(no_cmi), type = "response")
-
-    # possibleError <- tryCatch(
-    #   auc(no_cmi$outcome_int, y.pred_no_cmi),
-    #   auc(have_cmi$outcome_int, y.pred_cmi),
-    #   auc(df$outcome_int, y.pred),
-    #   error=function(e) e
-    # )
-
-    # if(inherits(possibleError, "error")) {
-    #   auc = 0
-    #   # print("No-intervention group have no outcome")
-    #   break
-    # }
-
     
     auc_corrected_bias = auc_corrected_bias + 
-      dim(have_cmi)[1]/dim(df)[1] * (ideal_auc - auc(have_cmi$outcome_int, y.pred_cmi)) + 
-      dim(no_cmi)[1]/dim(df)[1] * (ideal_auc - auc(no_cmi$outcome_int, y.pred_no_cmi))
+      dim(have_cmi)[1]/dim(df)[1] * (ideal_auc - auc(have_cmi$outcome_int, have_cmi$risk_t1)) + 
+      dim(no_cmi)[1]/dim(df)[1] * (ideal_auc - auc(no_cmi$outcome_int, no_cmi$risk_t1))
     
-    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(df$outcome_int, y.pred))
+    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(df$outcome_int, df$risk_t1))
   }
 
   model_sum$auc_corrected_bias[row] <- auc_corrected_bias/repeats
   model_sum$auc_uncorrected_bias[row] <- auc_uncorrected_bias/repeats
 }
 
-write_csv(model_sum, "model_sum_0306.csv")
+# write_csv(model_sum, "model_sum_0306.csv")
 ```
 
 ### 3.2 Point-of-care intervention
@@ -693,13 +676,7 @@ for (row in 1:dim(model_sum_lb2)[1]){
     y.test <- y[test,]
 
     # original auc
-    fit <- glm(y.train ~ risk_t1, data = x.train, family = poisson())
-
-    x.test_1 <- x.test %>%
-      select(risk_t1)
-    y.pred_resp <- predict.glm(fit, x.test_1, type = "response")
-    
-    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(y.test, y.pred_resp)) # old bias
+    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(y.test, x.test$risk_t1)) # old bias
 
     # fit model with new information: CMI
     fit_lb <- glm(y.train ~ risk_t1 + as.factor(cmi), data = x.train, family = poisson())
@@ -707,21 +684,12 @@ for (row in 1:dim(model_sum_lb2)[1]){
     # deterministically can't compare cmi at fixed level of risk_t1, problematic method bc need to supply start value
 
     # for the patients with observation, use exp(\beta_{i}) to adjust their risk
-    x.train_2 <- x.train %>%
-      mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb)[3]),
-                               risk_t1))
     x.test_2 <- x.test %>%
       mutate(new_risk = ifelse(cmi == 1, risk_t1 * exp(coef(fit_lb)[3]),
                                risk_t1))
 
-    fit_lb2 <- glm(y.train ~ new_risk, data = x.train_2, family = poisson())
-
-
-    # use new_risk to fit model
-    x.test_2 <- x.test_2 %>%
-      select(new_risk)
-    y.pred_resp_2 <- predict.glm(fit_lb2, x.test_2, type = "response")
-     auc_corrected_bias =  auc_corrected_bias + (ideal_auc - auc(y.test, y.pred_resp_2)) # new bias
+     auc_corrected_bias =  auc_corrected_bias + (ideal_auc - auc(y.test, x.test_2$new_risk)) # new bias
+    
      
   }
   model_sum_lb2$auc_corrected_bias[row] <- auc_corrected_bias/repeats
@@ -755,24 +723,16 @@ for (row in 1:dim(model_sum2)[1]){
     
     ideal_auc <- auc(df$outcome_noint, df$risk_t1)
 
-    fit <- glm(outcome_int ~ risk_t1 , data = df, family = binomial)
-    y.pred <- predict(fit, as.data.frame(df), type = "response")
-
     have_cmi <- df %>%
       filter(cmi == 1)
     no_cmi <- df %>%
       filter(cmi == 0)
-
-    fit_cmi <- glm(outcome_int ~ risk_t1, data = have_cmi, family = binomial)
-    y.pred_cmi <- predict(fit_cmi, as.data.frame(have_cmi), type = "response")
-    fit_no_cmi <- glm(outcome_int ~ risk_t1, data = no_cmi, family = binomial)
-    y.pred_no_cmi <- predict(fit_no_cmi, as.data.frame(no_cmi), type = "response")
     
     auc_corrected_bias = auc_corrected_bias + 
-      dim(have_cmi)[1]/dim(df)[1] * (ideal_auc - auc(have_cmi$outcome_int, y.pred_cmi)) + 
-      dim(no_cmi)[1]/dim(df)[1] * (ideal_auc - auc(no_cmi$outcome_int, y.pred_no_cmi))
+      dim(have_cmi)[1]/dim(df)[1] * (ideal_auc - auc(have_cmi$outcome_int, have_cmi$risk_t1)) + 
+      dim(no_cmi)[1]/dim(df)[1] * (ideal_auc - auc(no_cmi$outcome_int, no_cmi$risk_t1))
     
-    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(df$outcome_int, y.pred))
+    auc_uncorrected_bias = auc_uncorrected_bias + (ideal_auc - auc(df$outcome_int, df$risk_t1))
   }
 
   model_sum2$auc_corrected_bias[row] <- auc_corrected_bias/repeats
