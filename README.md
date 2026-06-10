@@ -1,27 +1,28 @@
-# Turbulence Study
+# Intervention Causal Study
 
-A statistical case study analyzing turbulence data using R. This repository contains data analysis, statistical modeling, and physics interpretation of turbulence phenomena.
+This repository is the code for my senior thesis project where I investigated the impact of Confounding by Medical Interventions (CMI) on Clinical Prediction Models (CPMs) using electronic health records (EHR). When medical interventions are effective, they can mask a patient's true risk, leading to inaccurate performance evaluations for CPMs.
 
-## Contents
 
-- **Data:** Training and test datasets for analysis
-- **Analysis:** Multiple RMarkdown notebooks exploring different aspects of turbulence
-- **Output:** Compiled final report with findings and interpretations
+### Prerequisites
+- R (version 3.6 or higher)
+- RStudio 
+- Required R packages: rmarkdown, ggplot2, and others as specified in the analysis files
 
-## Key Files
+### Quick Start
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yihan-shi/Intervention-causal-study.git
+   cd Intervention-causal-study
+   ```
 
-| File | Description |
-|------|-------------|
-| `medy_case_study.Rmd` | Main case study and exploratory analysis |
-| `medy_central_moment.Rmd` | Statistical moment calculations and analysis |
-| `medy_physics_interpretation.Rmd` | Physical interpretation of statistical findings |
-| `final report.Rmd` | Comprehensive final report |
-| `final-report.pdf` | Compiled final report (PDF) |
-| `data-train.csv` | Training dataset |
-| `data-test.csv` | Test dataset |
+2. Open the project in RStudio:
+   ```bash
+   open Fall_2022_thesis.Rproj
+   ```
 
-## Getting Started
+3. Open and compile the main thesis document:
+   - Open `final_thesis.Rmd` in RStudio
+   - Click the **Knit** button to generate the PDF output
 
-1. Open `STA-325-Case-Study.Rproj` in RStudio
-2. Open any `.Rmd` file and click **Knit** to generate analysis outputs
-3. View the compiled `final-report.pdf` for the complete summary
+4. Or view the pre-compiled thesis:
+   - Open `final_thesis.pdf` directly
