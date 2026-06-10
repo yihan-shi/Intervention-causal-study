@@ -25,4 +25,4 @@ This repository is the code for my senior thesis project where I investigated th
    - Click the **Knit** button to generate the PDF output
 
 4. Or view the pre-compiled thesis:
-   - Open `final_thesis.pdf` directly
+   - Open `STA_thesis_YihanShi (1).pdf` directly
